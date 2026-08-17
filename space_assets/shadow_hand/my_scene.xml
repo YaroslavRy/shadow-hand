@@ -11,7 +11,9 @@
   <!-- ============================================================ -->
 
   <visual>
-    <quality shadowsize="8192"/>
+    <!-- 8192 is appropriate for desktop captures but dominates CPU Basic
+         rendering time. 512 keeps the contact shadow legible in a Space. -->
+    <quality shadowsize="512"/>
     <global azimuth="140" elevation="-0"/>
   </visual>
 

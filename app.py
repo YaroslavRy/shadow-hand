@@ -78,9 +78,9 @@ class ShadowHandRenderer:
         target_y: float = 0.0,
         target_z: float = 0.20,
     ):
-        """Retarget the latest camera frame and return a rendered hand."""
+        """Retarget the latest camera frame and return preview + render."""
         if frame is None:
-            return None, "Waiting for a webcam frame."
+            return None, None, "Waiting for a webcam frame."
 
         with self.lock:
             started = time.perf_counter()
@@ -92,11 +92,15 @@ class ShadowHandRenderer:
             # Mirror to match the familiar selfie-view coordinate convention.
             image = cv2.flip(frame, 1)
             results = self.hands.process(image)
+            annotated = image.copy()
             keypoints = None
 
             if results.multi_hand_landmarks:
                 hand = results.multi_hand_landmarks[0]
                 keypoints = np.asarray([[p.x, p.y, p.z] for p in hand.landmark])
+                mp.solutions.drawing_utils.draw_landmarks(
+                    annotated, hand, mp.solutions.hands.HAND_CONNECTIONS
+                )
             inference_ms = (time.perf_counter() - started) * 1_000
 
             if keypoints is None:
@@ -106,16 +110,27 @@ class ShadowHandRenderer:
                 for name, value in targets.items():
                     self.data.ctrl[self.actuator_ids[name]] = value
                 # A short settle is enough for a responsive visual preview.
+                simulation_started = time.perf_counter()
                 for _ in range(4):
                     mujoco.mj_step(self.model, self.data)
+                simulation_ms = (time.perf_counter() - simulation_started) * 1_000
                 status = "Hand detected · 20 Shadow Hand actuators retargeted."
+            if keypoints is None:
+                simulation_ms = 0.0
 
+            render_started = time.perf_counter()
             rendered = self._render()
+            render_ms = (time.perf_counter() - render_started) * 1_000
+            status += f"  |  infer {inference_ms:.0f} ms · sim {simulation_ms:.0f} ms · render {render_ms:.0f} ms"
             self.frames_processed += 1
-            if self.frames_processed % 30 == 0:
+            if self.frames_processed % 5 == 0:
                 total_ms = (time.perf_counter() - started) * 1_000
-                log.info("frame=%d inference=%.0fms total=%.0fms", self.frames_processed, inference_ms, total_ms)
-            return rendered, status
+                log.info(
+                    "frame=%d inference=%.0fms render=%.0fms total=%.0fms",
+                    self.frames_processed, inference_ms, render_ms, total_ms,
+                )
+            preview = cv2.resize(annotated, (160, 120), interpolation=cv2.INTER_AREA)
+            return preview, rendered, status
 
     def update_camera(
         self,
@@ -155,6 +170,11 @@ are geometrically retargeted to a 20-actuator MuJoCo Shadow Hand.
                 image_mode="RGB",
                 height=180,
             )
+            landmarks = gr.Image(
+                label="Detected keypoints",
+                type="numpy",
+                height=140,
+            )
         with gr.Column(scale=3, min_width=640):
             rendered = gr.Image(label="Shadow Hand simulation", type="numpy", height=560)
             with gr.Accordion("Scene controls", open=True):
@@ -169,7 +189,7 @@ are geometrically retargeted to a 20-actuator MuJoCo Shadow Hand.
     status = gr.Textbox(label="Status", interactive=False)
 
     render_inputs = [camera, azimuth, elevation, distance, target_x, target_y, target_z]
-    render_outputs = [rendered, status]
+    render_outputs = [landmarks, rendered, status]
     camera.change(
         PIPELINE.process,
         inputs=render_inputs,
