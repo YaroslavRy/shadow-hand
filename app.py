@@ -1,10 +1,12 @@
 """Browser demo for Shadow Hand retargeting.
 
-Designed for Hugging Face Spaces: a webcam/uploaded RGB frame is retargeted to
-the Shadow Hand and rendered server-side without a native MuJoCo viewer.
+Designed for Hugging Face Spaces: a webcam frame is retargeted to the Shadow
+Hand and rendered server-side without a native MuJoCo viewer.
 """
 
+import logging
 import threading
+import time
 
 import cv2
 import gradio as gr
@@ -19,12 +21,13 @@ from shadow_hand.settings import ACTUATOR_MAP, PROJECT_ROOT, SCENE_PATH
 # Keep the full Menagerie checkout out of the deployment. Locally we retain
 # SCENE_PATH; the Space instead carries this small, self-contained asset copy.
 SPACE_SCENE_PATH = PROJECT_ROOT / "space_assets" / "shadow_hand" / "my_scene.xml"
+log = logging.getLogger(__name__)
 
 
 class ShadowHandRenderer:
     """A serialized, headless MuJoCo + MediaPipe inference pipeline."""
 
-    def __init__(self, width: int = 480, height: int = 360) -> None:
+    def __init__(self, width: int = 400, height: int = 300) -> None:
         scene_path = SPACE_SCENE_PATH if SPACE_SCENE_PATH.exists() else SCENE_PATH
         self.model = mujoco.MjModel.from_xml_path(str(scene_path))
         self.data = mujoco.MjData(self.model)
@@ -45,6 +48,7 @@ class ShadowHandRenderer:
             for name in ACTUATOR_MAP
         }
         self.lock = threading.Lock()
+        self.frames_processed = 0
 
     def _set_camera(
         self,
@@ -74,11 +78,12 @@ class ShadowHandRenderer:
         target_y: float = 0.0,
         target_z: float = 0.20,
     ):
-        """Return annotated camera frame, rendered hand, and a compact status."""
+        """Retarget the latest camera frame and return a rendered hand."""
         if frame is None:
-            return None, None, "Waiting for a webcam frame or image upload."
+            return None, "Waiting for a webcam frame."
 
         with self.lock:
+            started = time.perf_counter()
             self._set_camera(
                 azimuth, elevation, distance, target_x, target_y, target_z
             )
@@ -87,15 +92,12 @@ class ShadowHandRenderer:
             # Mirror to match the familiar selfie-view coordinate convention.
             image = cv2.flip(frame, 1)
             results = self.hands.process(image)
-            annotated = image.copy()
             keypoints = None
 
             if results.multi_hand_landmarks:
                 hand = results.multi_hand_landmarks[0]
                 keypoints = np.asarray([[p.x, p.y, p.z] for p in hand.landmark])
-                mp.solutions.drawing_utils.draw_landmarks(
-                    annotated, hand, mp.solutions.hands.HAND_CONNECTIONS
-                )
+            inference_ms = (time.perf_counter() - started) * 1_000
 
             if keypoints is None:
                 status = "No hand detected — keep one hand visible to the camera."
@@ -104,12 +106,16 @@ class ShadowHandRenderer:
                 for name, value in targets.items():
                     self.data.ctrl[self.actuator_ids[name]] = value
                 # A short settle is enough for a responsive visual preview.
-                for _ in range(10):
+                for _ in range(4):
                     mujoco.mj_step(self.model, self.data)
                 status = "Hand detected · 20 Shadow Hand actuators retargeted."
 
             rendered = self._render()
-            return annotated, rendered, status
+            self.frames_processed += 1
+            if self.frames_processed % 30 == 0:
+                total_ms = (time.perf_counter() - started) * 1_000
+                log.info("frame=%d inference=%.0fms total=%.0fms", self.frames_processed, inference_ms, total_ms)
+            return rendered, status
 
     def update_camera(
         self,
@@ -149,7 +155,6 @@ are geometrically retargeted to a 20-actuator MuJoCo Shadow Hand.
                 image_mode="RGB",
                 height=180,
             )
-            landmarks = gr.Image(label="Detected keypoints", type="numpy", height=180)
         with gr.Column(scale=3, min_width=640):
             rendered = gr.Image(label="Shadow Hand simulation", type="numpy", height=560)
             with gr.Accordion("Scene controls", open=True):
@@ -164,15 +169,30 @@ are geometrically retargeted to a 20-actuator MuJoCo Shadow Hand.
     status = gr.Textbox(label="Status", interactive=False)
 
     render_inputs = [camera, azimuth, elevation, distance, target_x, target_y, target_z]
-    render_outputs = [landmarks, rendered, status]
-    camera.change(PIPELINE.process, inputs=render_inputs, outputs=render_outputs)
-    camera.stream(PIPELINE.process, inputs=render_inputs, outputs=render_outputs)
+    render_outputs = [rendered, status]
+    camera.change(
+        PIPELINE.process,
+        inputs=render_inputs,
+        outputs=render_outputs,
+        trigger_mode="always_last",
+        concurrency_id="hand-pipeline",
+    )
+    camera.stream(
+        PIPELINE.process,
+        inputs=render_inputs,
+        outputs=render_outputs,
+        stream_every=0.1,
+        trigger_mode="always_last",
+        concurrency_id="hand-pipeline",
+    )
     controls = render_inputs[1:]
     for control in controls:
         control.change(
             PIPELINE.update_camera,
             inputs=controls,
             outputs=[rendered, status],
+            trigger_mode="always_last",
+            concurrency_id="hand-pipeline",
         )
 
     gr.Markdown(
@@ -186,4 +206,7 @@ locally. No camera frames are recorded by this Space.
 
 
 if __name__ == "__main__":
-    demo.queue(default_concurrency_limit=1).launch(server_name="0.0.0.0", server_port=7860)
+    # Keep only one pending event: interactive video must prefer freshness.
+    demo.queue(default_concurrency_limit=1, max_size=1).launch(
+        server_name="0.0.0.0", server_port=7860
+    )
