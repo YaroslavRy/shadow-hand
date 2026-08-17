@@ -90,10 +90,16 @@ are geometrically retargeted to a 20-actuator MuJoCo Shadow Hand.
 """
     )
     with gr.Row():
-        source = gr.Image(
-            label="Camera / image input",
-            sources=["webcam", "upload"],
+        camera = gr.Image(
+            label="Live webcam",
+            sources=["webcam"],
             streaming=True,
+            type="numpy",
+            image_mode="RGB",
+        )
+        upload = gr.Image(
+            label="Image upload",
+            sources=["upload"],
             type="numpy",
             image_mode="RGB",
         )
@@ -101,8 +107,9 @@ are geometrically retargeted to a 20-actuator MuJoCo Shadow Hand.
     landmarks = gr.Image(label="MediaPipe landmarks", type="numpy")
     status = gr.Textbox(label="Status", interactive=False)
 
-    source.change(PIPELINE.process, inputs=source, outputs=[landmarks, rendered, status])
-    source.stream(PIPELINE.process, inputs=source, outputs=[landmarks, rendered, status])
+    camera.change(PIPELINE.process, inputs=camera, outputs=[landmarks, rendered, status])
+    camera.stream(PIPELINE.process, inputs=camera, outputs=[landmarks, rendered, status])
+    upload.change(PIPELINE.process, inputs=upload, outputs=[landmarks, rendered, status])
 
     gr.Markdown(
         """### Notes
