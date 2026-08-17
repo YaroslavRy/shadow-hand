@@ -46,6 +46,11 @@
            diffuse="0.10 0.12 0.16"
            specular="0.0 0.0 0.0"/>
 
+    <!-- Fixed framing for the server-side renderer: whole hand, no viewer
+         free-camera state, and no floor-dominated default view. -->
+    <camera name="teleop_camera" pos="0.42 -0.55 0.34"
+            xyaxes="0.794 0.608 0 -0.120 0.157 0.981" fovy="35"/>
+
     <!-- Floor plane for shadow casting -->
     <geom name="floor" pos="0 0 -0.2" size="0 0 0.05" type="plane" material="groundplane"/>
 

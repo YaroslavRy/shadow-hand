@@ -49,6 +49,8 @@ class ShadowHandRenderer:
             return None, None, "Waiting for a webcam frame or image upload."
 
         with self.lock:
+            # Keep CPU inference and browser round trips light on CPU Basic.
+            frame = cv2.resize(frame, (320, 240), interpolation=cv2.INTER_AREA)
             # Mirror to match the familiar selfie-view coordinate convention.
             image = cv2.flip(frame, 1)
             results = self.hands.process(image)
@@ -68,12 +70,12 @@ class ShadowHandRenderer:
                 targets = extract_shadow_hand_targets(keypoints)
                 for name, value in targets.items():
                     self.data.ctrl[self.actuator_ids[name]] = value
-                # Let position actuators settle before rendering this pose.
-                for _ in range(20):
+                # A short settle is enough for a responsive visual preview.
+                for _ in range(10):
                     mujoco.mj_step(self.model, self.data)
                 status = "Hand detected · 20 Shadow Hand actuators retargeted."
 
-            self.renderer.update_scene(self.data)
+            self.renderer.update_scene(self.data, camera="teleop_camera")
             rendered = self.renderer.render()
             return annotated, rendered, status
 
@@ -90,21 +92,25 @@ are geometrically retargeted to a 20-actuator MuJoCo Shadow Hand.
 """
     )
     with gr.Row():
-        camera = gr.Image(
-            label="Live webcam",
-            sources=["webcam"],
-            streaming=True,
-            type="numpy",
-            image_mode="RGB",
-        )
-        upload = gr.Image(
-            label="Image upload",
-            sources=["upload"],
-            type="numpy",
-            image_mode="RGB",
-        )
-        rendered = gr.Image(label="Headless MuJoCo render", type="numpy")
-    landmarks = gr.Image(label="MediaPipe landmarks", type="numpy")
+        with gr.Column(scale=1, min_width=220):
+            camera = gr.Image(
+                label="Live webcam",
+                sources=["webcam"],
+                streaming=True,
+                type="numpy",
+                image_mode="RGB",
+                height=180,
+            )
+            upload = gr.Image(
+                label="Image upload",
+                sources=["upload"],
+                type="numpy",
+                image_mode="RGB",
+                height=180,
+            )
+            landmarks = gr.Image(label="Detected keypoints", type="numpy", height=180)
+        with gr.Column(scale=3, min_width=640):
+            rendered = gr.Image(label="Shadow Hand simulation", type="numpy", height=560)
     status = gr.Textbox(label="Status", interactive=False)
 
     camera.change(PIPELINE.process, inputs=camera, outputs=[landmarks, rendered, status])
