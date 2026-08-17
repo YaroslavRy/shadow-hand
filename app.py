@@ -29,6 +29,9 @@ class ShadowHandRenderer:
         self.model = mujoco.MjModel.from_xml_path(str(scene_path))
         self.data = mujoco.MjData(self.model)
         self.renderer = mujoco.Renderer(self.model, width=width, height=height)
+        self.camera = mujoco.MjvCamera()
+        mujoco.mjv_defaultCamera(self.camera)
+        self.camera.type = mujoco.mjtCamera.mjCAMERA_FREE
         self.hands = mp.solutions.hands.Hands(
             static_image_mode=False,
             max_num_hands=1,
@@ -43,12 +46,25 @@ class ShadowHandRenderer:
         }
         self.lock = threading.Lock()
 
-    def process(self, frame: np.ndarray):
+    def process(
+        self,
+        frame: np.ndarray,
+        azimuth: float = 140,
+        elevation: float = -15,
+        distance: float = 0.52,
+        target_x: float = 0.0,
+        target_y: float = 0.0,
+        target_z: float = 0.20,
+    ):
         """Return annotated camera frame, rendered hand, and a compact status."""
         if frame is None:
             return None, None, "Waiting for a webcam frame or image upload."
 
         with self.lock:
+            self.camera.azimuth = azimuth
+            self.camera.elevation = elevation
+            self.camera.distance = distance
+            self.camera.lookat[:] = (target_x, target_y, target_z)
             # Keep CPU inference and browser round trips light on CPU Basic.
             frame = cv2.resize(frame, (320, 240), interpolation=cv2.INTER_AREA)
             # Mirror to match the familiar selfie-view coordinate convention.
@@ -75,7 +91,7 @@ class ShadowHandRenderer:
                     mujoco.mj_step(self.model, self.data)
                 status = "Hand detected · 20 Shadow Hand actuators retargeted."
 
-            self.renderer.update_scene(self.data, camera="teleop_camera")
+            self.renderer.update_scene(self.data, camera=self.camera)
             rendered = self.renderer.render()
             return annotated, rendered, status
 
@@ -101,21 +117,26 @@ are geometrically retargeted to a 20-actuator MuJoCo Shadow Hand.
                 image_mode="RGB",
                 height=180,
             )
-            upload = gr.Image(
-                label="Image upload",
-                sources=["upload"],
-                type="numpy",
-                image_mode="RGB",
-                height=180,
-            )
             landmarks = gr.Image(label="Detected keypoints", type="numpy", height=180)
         with gr.Column(scale=3, min_width=640):
             rendered = gr.Image(label="Shadow Hand simulation", type="numpy", height=560)
+            with gr.Accordion("Scene controls", open=True):
+                with gr.Row():
+                    azimuth = gr.Slider(-180, 180, value=140, step=1, label="Rotate left / right")
+                    elevation = gr.Slider(-85, 85, value=-15, step=1, label="Rotate up / down")
+                    distance = gr.Slider(0.25, 1.2, value=0.52, step=0.01, label="Zoom")
+                with gr.Row():
+                    target_x = gr.Slider(-0.25, 0.25, value=0.0, step=0.01, label="Move target X")
+                    target_y = gr.Slider(-0.25, 0.25, value=0.0, step=0.01, label="Move target Y")
+                    target_z = gr.Slider(-0.05, 0.45, value=0.20, step=0.01, label="Move target Z")
     status = gr.Textbox(label="Status", interactive=False)
 
-    camera.change(PIPELINE.process, inputs=camera, outputs=[landmarks, rendered, status])
-    camera.stream(PIPELINE.process, inputs=camera, outputs=[landmarks, rendered, status])
-    upload.change(PIPELINE.process, inputs=upload, outputs=[landmarks, rendered, status])
+    render_inputs = [camera, azimuth, elevation, distance, target_x, target_y, target_z]
+    render_outputs = [landmarks, rendered, status]
+    camera.change(PIPELINE.process, inputs=render_inputs, outputs=render_outputs)
+    camera.stream(PIPELINE.process, inputs=render_inputs, outputs=render_outputs)
+    for control in render_inputs[1:]:
+        control.change(PIPELINE.process, inputs=render_inputs, outputs=render_outputs)
 
     gr.Markdown(
         """### Notes
