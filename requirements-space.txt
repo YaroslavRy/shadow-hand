@@ -1,0 +1,5 @@
+gradio>=5.0,<6
+mediapipe>=0.10.21,<0.10.22
+mujoco>=3.2,<4
+numpy>=1.26,<2
+opencv-python-headless>=4.10,<5

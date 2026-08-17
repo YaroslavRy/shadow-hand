@@ -1,0 +1,10 @@
+# The local research checkout contains recordings, experiments and the full
+# Menagerie (~2 GB). A Space needs only its app, retargeting code and one hand.
+*
+!app.py
+!Dockerfile
+!requirements-space.txt
+!shadow_hand/
+!shadow_hand/**
+!space_assets/
+!space_assets/**

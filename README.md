@@ -1,3 +1,13 @@
+---
+title: Shadow Hand Teleoperation
+emoji: 🦾
+colorFrom: blue
+colorTo: indigo
+sdk: docker
+app_port: 7860
+suggested_hardware: cpu-basic
+---
+
 # 🦾 Shadow Hand teleop — MediaPipe → MuJoCo
 
 > Educational project. Real-time teleoperation of the DeepMind Menagerie
@@ -5,6 +15,13 @@
 > designed to accept **EMG / EEG / video** signals tomorrow.
 
 ![demo](assets/0820.png)
+
+## Hosted demo
+
+The Hugging Face Space runs [app.py](app.py): browser webcam/upload →
+MediaPipe landmarks → 20 Shadow Hand controls → headless MuJoCo render. It is
+a visual demo, not a low-latency physical-robot controller; the native viewer
+path remains available locally.
 
 ## What this is
 
