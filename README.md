@@ -3,38 +3,50 @@ title: Shadow Hand Teleoperation
 emoji: 🦾
 colorFrom: blue
 colorTo: indigo
-sdk: static
+sdk: docker
 suggested_hardware: cpu-basic
 ---
 
-# 🦾 Shadow Hand teleop — MediaPipe → MuJoCo
+# Shadow Hand Teleoperation
 
-> Educational project. Real-time teleoperation of the DeepMind Menagerie
-> Shadow Hand in MuJoCo, driven today by webcam-based hand pose, and
-> designed to accept **EMG / EEG / video** signals tomorrow.
+**Webcam hand pose → MediaPipe landmarks → retargeting → real MuJoCo Shadow Hand.**
 
-![demo](assets/0820.png)
+![Shadow Hand teleoperation workbench](assets/screen3.png)
 
-## Hosted demo
+This is a research PoC for controlling the [DeepMind MuJoCo Menagerie Shadow Hand](https://github.com/google-deepmind/mujoco_menagerie/tree/main/shadow_hand) from a webcam. It is not a PyBullet demo and it does not use an animated hand substitute: the native reference application uses the Menagerie MJCF, MuJoCo position actuators, and `mj_step` physics.
 
-The Hugging Face Space runs entirely in the browser: webcam → MediaPipe
-landmarks → retargeted WebGL hand. No webcam frames are sent to the server.
-The native MuJoCo viewer path remains available locally.
+## Two execution paths
 
-## What this is
+```mermaid
+flowchart LR
+  C[Webcam] --> MP[MediaPipe: 21 landmarks]
+  MP --> R[Geometric retargeting]
+  R --> A[20 Shadow Hand actuator targets]
+  A --> M[MuJoCo Menagerie model]
+  M --> V[Rendered Shadow Hand]
+```
 
-- **Input today:** webcam → MediaPipe → 21 hand landmarks
-- **Output:** 20-actuator Shadow Hand in MuJoCo, controlled in real time
-- **Why this shape:** the whole pipeline funnels through one function —
-  `compute_signals(landmarks)` — so any future signal source (EMG
-  envelopes, EEG features, a learned video → pose model) plugs in by
-  replacing that one call, leaving the actuator mapping, smoothing, and
-  viewer intact.
+| Path | Purpose | Engine |
+|---|---|---|
+| **Native local** | Research, tuning, contact/tactile-sensor experiments | MuJoCo Python + native viewer |
+| **This Hugging Face Space** | Public interactive demonstration | Headless MuJoCo + streamed render |
+| **Local WASM experiment** | Low-latency browser prototype, tested before deployment | Official MuJoCo compiled to WebAssembly |
 
-## Quick start
+The WASM path is an active experiment; it only becomes the hosted demo after it reproduces the real model’s visual and retargeting behaviour locally.
 
-Requires Python 3.10 and a webcam. (`mjpython` ships with `mujoco`; macOS
-needs it for the interactive viewer.)
+## Current experiment status
+
+- [x] Menagerie Shadow Hand MJCF and mesh assets
+- [x] 20 actuator targets from MediaPipe geometry
+- [x] MuJoCo stepping and native local viewer
+- [x] Per-frame landmark / actuator CSV logging
+- [x] Browser-side MediaPipe prototype
+- [~] Browser-side MuJoCo-WASM renderer and retargeting parity
+- [ ] Tactile/contact sensors and contact-readout experiments
+
+## Run the reference system locally
+
+The local application is the source of truth for physics and future sensor work. It requires Python 3.10, MuJoCo, and a webcam.
 
 ```bash
 uv venv --python 3.10
@@ -42,143 +54,50 @@ uv pip install mediapipe mujoco opencv-python numpy
 uv run mjpython -m shadow_hand.main
 ```
 
-Press **ESC** or **Q** in the MuJoCo window to quit.
+Press `ESC` or `Q` in the MuJoCo window to quit. Recorded samples are written to `data/hand_log.csv` unless `--no-record` is passed.
 
-| flag | effect |
-|------|--------|
-| `--no-record` | don't write `data/hand_log.csv` |
-| `--no-cv2`    | don't open the webcam preview window |
-| `--log-level DEBUG` | verbose logs |
+## Retargeting experiment
 
-## Architecture
+Each video frame produces 21 MediaPipe points. `compute_signals()` extracts finger curl, signed spread, and thumb-opposition signals. The mapping table in [`shadow_hand/settings.py`](shadow_hand/settings.py) converts those signals to the 20 position-actuator targets, then an EMA smooths the targets before the simulation advances.
 
-Three concurrent layers, decoupled by single-slot queues:
-
-```mermaid
-flowchart LR
-    cam[Webcam] -->|frames| trk["tracking.py<br/>MediaPipe<br/>(BG thread)"]
-    trk -->|Queue(1)<br/>21 landmarks| ctl["main.py<br/>control loop<br/>30 Hz"]
-    ctl -->|mp.Queue| prev[cv2 preview<br/>subprocess]
-    ctl --> mj[(MuJoCo viewer)]
+```text
+21 landmarks
+     │
+     ▼
+curl / spread / thumb-opposition
+     │
+     ▼
+ACTUATOR_MAP + optional synergy prior
+     │
+     ▼
+data.ctrl[20] → mj_step → Shadow Hand state
 ```
 
-MediaPipe takes 30–50 ms per frame on CPU. Running it inline would tank
-the sim. The single-slot queue means the control loop always reads the
-freshest landmarks and never blocks.
+The CSV log keeps the time-aligned landmarks and actuator targets. It is the dataset scaffold for future EMG/EEG decoders and learned retargeting.
 
-## Per-frame pipeline
+## Reproducible local WASM workbench
 
-```mermaid
-flowchart TB
-    A[21 landmarks] --> B["compute_signals()<br/>curl, signed spread, thumb_*"]
-    B --> C["ACTUATOR_MAP<br/>target = clip(signal·gain + offset)"]
-    C --> D["SynergyProjector (opt-in)<br/>Santello 5-DOF prior"]
-    D --> E["smooth_targets()<br/>EMA blend"]
-    E --> F["data.ctrl[i]"]
-    F --> G["mj_step × 16<br/>→ viewer.sync()"]
+The experimental browser workbench runs locally only:
+
+```bash
+npm install
+npm run dev -- --port 5180
 ```
 
-[shadow_hand/settings.py](shadow_hand/settings.py) is the single source
-of truth — one row per actuator: `(signal, gain, offset, clip)`. Tune
-the mapping by editing that table; restart to pick up changes.
+Open `http://127.0.0.1:5180`. It loads the same Menagerie XML and mesh assets into official MuJoCo WASM; webcam frames remain in the browser. This is being validated against the native reference before it replaces the public Space.
 
-## Theory cheatsheet
+## Project map
 
-**Finger curl** — ratio of straight to bent path through MCP→PIP→DIP→TIP.
-Robust under MediaPipe noise because it cancels overall hand scale:
-
-$$
-\text{curl} = 1 - \frac{\|p_{tip} - p_{mcp}\|}
-                       {\|p_{pip}-p_{mcp}\| + \|p_{dip}-p_{pip}\| + \|p_{tip}-p_{dip}\|}
-$$
-
-**Signed 2D spread** — angle from the middle-finger ray to this-finger
-ray in the image plane. The sign distinguishes outward fan from inward
-crossing — unsigned angles can't:
-
-$$
-\theta = \mathrm{atan2}\!\bigl(v_{m,x}\,v_{f,y} - v_{m,y}\,v_{f,x},\; v_m\cdot v_f\bigr)
-$$
-
-**Thumb opposition** — `thumb_tip ↔ pinky_MCP` distance normalized by
-palm width. 1.0 ≈ closed pinch, 0 ≈ open.
-
-**Santello synergy prior** — humans use ~5 effective DOFs out of the
-hand's 20+ (Santello, Flanders & Soechting, 1998). `SynergyProjector`
-projects the 20-dim target onto a 5-dim subspace and back, smoothing
-noise and suppressing impossible poses. Opt-in.
-
-## Data recording
-
-Every frame is logged to `data/hand_log.csv`:
-
+```text
+shadow_hand/       native MuJoCo reference application
+space_assets/      Menagerie Shadow Hand MJCF and visual assets
+web/               local MuJoCo-WASM experiment
+data/              recorded landmark / actuator samples
+docs/              experiment notes and design rationale
 ```
-timestamp_ms, mp_0_x, mp_0_y, mp_0_z, …, mp_20_z, rh_A_WRJ2, rh_A_WRJ1, …
-```
-
-This is the training scaffold for the biosignal path: time-aligned
-(landmarks, actuator targets) ground truth a future EMG / EEG decoder
-can be supervised against.
-
-### Example: replacing MediaPipe with a custom signal source
-
-The whole input side is one swap:
-
-```python
-# shadow_hand/model.py
-def compute_signals(features):    # was: keypoints
-    # features can be EMG envelopes, EEG band powers, or learned pose
-    return {
-        "curl_index":   my_decoder(features, "index"),
-        "spread_index": my_decoder(features, "index_spread"),
-        # ...
-    }
-```
-
-`extract_shadow_hand_targets`, smoothing, viewer, and CSV recording
-stay unchanged.
-
-## Project layout
-
-```
-shadow_hand/         ← active path
-  main.py            ← control loop, viewer
-  tracking.py        ← camera + MediaPipe (background thread)
-  model.py           ← compute_signals, extract_shadow_hand_targets
-  settings.py        ← ACTUATOR_MAP, paths, FPS
-  mano_pipeline.py   ← SynergyProjector + MANO scaffold (opt-in)
-pybullet_hand/       ← legacy PyBullet path, archived
-experiments/         ← notebooks, scratch (rnn, diffusion, drawing)
-assets/              ← MuJoCo Menagerie Shadow Hand XMLs, screenshots
-docs/                ← ARCHITECTURE / RETARGETING / CHANGES
-data/                ← hand_log.csv recordings
-tests/               ← cv / mujoco / thumb sanity tests
-```
-
-## Roadmap
-
-- [x] PyBullet URDF version (archived under [pybullet_hand/](pybullet_hand/))
-- [x] MuJoCo Shadow Hand teleop
-- [x] Concurrent perception (camera + MediaPipe off the control loop)
-- [x] Santello synergy projector (opt-in)
-- [ ] EMG envelope → `compute_signals` (replace MediaPipe input)
-- [ ] EEG / motor-imagery decoder
-- [ ] Video → MANO → Shadow retargeting — see [docs/RETARGETING.md](docs/RETARGETING.md)
-- [ ] Tactile sensing in MuJoCo
-- [ ] Learned residual on top of geometric mapping
-
-## Abbreviations
-
-- **DOF** — degree of freedom
-- **MCP** — metacarpophalangeal joint (palm ↔ finger knuckle)
-- **PIP** — proximal interphalangeal (middle knuckle)
-- **DIP** — distal interphalangeal (top knuckle)
-- **CMC** — carpometacarpal (thumb base)
-- **EMA** — exponential moving average
 
 ## References
 
-- DeepMind Menagerie — Shadow Hand: https://github.com/google-deepmind/mujoco_menagerie/tree/main/shadow_hand
-- Santello, Flanders & Soechting (1998), *Postural Hand Synergies for Tool Use*, J. Neuroscience.
-- MediaPipe Hands — 21-point landmark model.
-- Tactile sensing + DDPG for in-hand manipulation — https://www.frontiersin.org/journals/robotics-and-ai/articles/10.3389/frobt.2021.538773/full
+- DeepMind, [MuJoCo Menagerie: Shadow Hand](https://github.com/google-deepmind/mujoco_menagerie/tree/main/shadow_hand)
+- Santello, Flanders & Soechting (1998), *Postural Hand Synergies for Tool Use*
+- Google, [MediaPipe Hands](https://ai.google.dev/edge/mediapipe/solutions/vision/hand_landmarker)
