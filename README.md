@@ -3,8 +3,7 @@ title: Shadow Hand Teleoperation
 emoji: 🦾
 colorFrom: blue
 colorTo: indigo
-sdk: docker
-app_port: 7860
+sdk: static
 suggested_hardware: cpu-basic
 ---
 
@@ -18,10 +17,9 @@ suggested_hardware: cpu-basic
 
 ## Hosted demo
 
-The Hugging Face Space runs [app.py](app.py): browser webcam/upload →
-MediaPipe landmarks → 20 Shadow Hand controls → headless MuJoCo render. It is
-a visual demo, not a low-latency physical-robot controller; the native viewer
-path remains available locally.
+The Hugging Face Space runs entirely in the browser: webcam → MediaPipe
+landmarks → retargeted WebGL hand. No webcam frames are sent to the server.
+The native MuJoCo viewer path remains available locally.
 
 ## What this is
 
