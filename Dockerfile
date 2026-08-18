@@ -8,7 +8,7 @@ FROM node:20-slim AS web
 WORKDIR /build
 COPY package.json package-lock.json ./
 RUN npm ci
-COPY vite.config.js index.html ./
+COPY vite.config.js index.html scene_params.json ./
 COPY web/ ./web/
 COPY public/ ./public/
 RUN npm run build
