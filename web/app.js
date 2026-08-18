@@ -2,6 +2,7 @@ import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { FilesetResolver, HandLandmarker } from "@mediapipe/tasks-vision";
 import { createShadowHandEngine } from "./mujoco-engine.js";
+import { SCENE_PARAMS } from "./params.js";
 import { extractTargets, smoothTargets, mirrorLandmarks, SMOOTHING_FACTOR, PHYSICS_TIMESTEP } from "./retarget.js";
 
 // Pin the wasm runtime to the installed @mediapipe/tasks-vision version (0.10.21);
@@ -13,11 +14,11 @@ const video = document.querySelector("#video"), canvas = document.querySelector(
 const status = document.querySelector("#status"), engineStatus = document.querySelector("#engine-status"), root = document.querySelector("#view");
 // my_scene.xml puts the MuJoCo ground plane at z=-0.2, and Three's Y is
 // MuJoCo's Z, so the visual floor has to sit there or the hand looks unmoored.
-const FLOOR_Y = -0.2;
+const FLOOR_Y = SCENE_PARAMS.floorY;
 const scene = new THREE.Scene(); scene.background = new THREE.Color(0x03070d);
-const camera = new THREE.PerspectiveCamera(38, 1, .01, 100); camera.position.set(.55, .3, .85);
+const camera = new THREE.PerspectiveCamera(SCENE_PARAMS.camera.fov, 1, SCENE_PARAMS.camera.near, SCENE_PARAMS.camera.far); camera.position.fromArray(SCENE_PARAMS.camera.initialPosition);
 const renderer = new THREE.WebGLRenderer({antialias:true,powerPreference:"high-performance"}); renderer.setPixelRatio(Math.min(devicePixelRatio, 2)); renderer.shadowMap.enabled = true; root.append(renderer.domElement);
-const orbit = new OrbitControls(camera, renderer.domElement); orbit.target.set(0, .28, 0); orbit.minDistance=.12; orbit.maxDistance=3.5; orbit.update();
+const orbit = new OrbitControls(camera, renderer.domElement); orbit.target.fromArray(SCENE_PARAMS.orbit.initialTarget); orbit.minDistance=SCENE_PARAMS.orbit.minDistance; orbit.maxDistance=SCENE_PARAMS.orbit.maxDistance; orbit.update();
 scene.add(new THREE.HemisphereLight(0xaad8ff, 0x03070d, 2));
 const light = new THREE.DirectionalLight(0xdfffff, 3); light.position.set(.3, .6, .4); light.castShadow = true; scene.add(light);
 const floor = new THREE.Mesh(new THREE.PlaneGeometry(4,4), new THREE.MeshStandardMaterial({color:0x101b2b})); floor.rotation.x = -Math.PI/2; floor.position.y = FLOOR_Y; floor.receiveShadow = true; scene.add(floor);
@@ -88,12 +89,13 @@ function frameLoadedHand() {
   const box = new THREE.Box3().setFromObject(realHand.group);
   if(box.isEmpty()) return;
   const center = box.getCenter(new THREE.Vector3());
+  center.add(new THREE.Vector3(...SCENE_PARAMS.framing.centerOffset));
   const radius = box.getBoundingSphere(new THREE.Sphere()).radius;
-  const distance = radius / Math.sin(THREE.MathUtils.degToRad(camera.fov) / 2) * 1.05;
+  const distance = radius / Math.sin(THREE.MathUtils.degToRad(camera.fov) / SCENE_PARAMS.framing.fovDivisor) * SCENE_PARAMS.framing.distanceScale;
   orbit.target.copy(center);
-  camera.position.copy(center).add(new THREE.Vector3(1.1,.7,1.5).normalize().multiplyScalar(distance));
-  camera.near = Math.max(.01, distance - radius * 2);
-  camera.far = distance + radius * 10;
+  camera.position.copy(center).add(new THREE.Vector3(...SCENE_PARAMS.framing.viewDirection).normalize().multiplyScalar(distance));
+  camera.near = Math.max(.01, distance - radius * SCENE_PARAMS.framing.nearRadiusScale);
+  camera.far = distance + radius * SCENE_PARAMS.framing.farRadiusScale;
   camera.updateProjectionMatrix();
   orbit.update();
 }

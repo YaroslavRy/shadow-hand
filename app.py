@@ -8,6 +8,7 @@ Designed for Hugging Face Spaces, serving both execution paths:
 import logging
 import threading
 import time
+import json
 
 import cv2
 import gradio as gr
@@ -22,6 +23,8 @@ from fastapi.staticfiles import StaticFiles
 from shadow_hand.model import extract_shadow_hand_targets
 from shadow_hand.settings import ACTUATOR_MAP, PROJECT_ROOT, SCENE_PATH
 
+SCENE_PARAMS = json.loads((PROJECT_ROOT / "scene_params.json").read_text())
+SERVER_SCENE_PARAMS = SCENE_PARAMS["server"]
 
 # Keep the full Menagerie checkout out of the deployment. Locally we retain
 # SCENE_PATH; the Space instead carries this small, self-contained asset copy.
@@ -76,12 +79,12 @@ class ShadowHandRenderer:
     def process(
         self,
         frame: np.ndarray,
-        azimuth: float = 140,
-        elevation: float = -15,
-        distance: float = 0.75,
-        target_x: float = 0.0,
-        target_y: float = 0.0,
-        target_z: float = 0.20,
+        azimuth: float = SERVER_SCENE_PARAMS["azimuth"],
+        elevation: float = SERVER_SCENE_PARAMS["elevation"],
+        distance: float = SERVER_SCENE_PARAMS["distance"],
+        target_x: float = SERVER_SCENE_PARAMS["target"][0],
+        target_y: float = SERVER_SCENE_PARAMS["target"][1],
+        target_z: float = SERVER_SCENE_PARAMS["target"][2],
     ):
         """Retarget the latest camera frame and return preview + render."""
         if frame is None:
@@ -163,6 +166,17 @@ with gr.Blocks(title="Shadow Hand Teleoperation") as demo:
 
 Move one hand in front of your camera. MediaPipe extracts 21 landmarks, which
 are geometrically retargeted to a 20-actuator MuJoCo Shadow Hand.
+
+Choose a path:
+- `/browser`: fastest demo, MuJoCo-WASM + webcam stay in your browser
+- `/server`: fallback demo, webcam frames are uploaded and rendered on this Space
+
+The native local app remains the source of truth for future tactile/contact
+sensor experiments.
+
+Roadmap:
+- tactile/contact sensors
+- optimization loop: user pose -> robot pose -> robot hand pose estimate -> minimize pose error
 """
     )
     with gr.Row():
@@ -184,13 +198,13 @@ are geometrically retargeted to a 20-actuator MuJoCo Shadow Hand.
             rendered = gr.Image(label="Shadow Hand simulation", type="numpy", height=560)
             with gr.Accordion("Scene controls", open=True):
                 with gr.Row():
-                    azimuth = gr.Slider(-180, 180, value=140, step=1, label="Rotate left / right")
-                    elevation = gr.Slider(-85, 85, value=-15, step=1, label="Rotate up / down")
-                    distance = gr.Slider(0.25, 1.4, value=0.75, step=0.01, label="Zoom")
+                    azimuth = gr.Slider(-180, 180, value=SERVER_SCENE_PARAMS["azimuth"], step=1, label="Rotate left / right")
+                    elevation = gr.Slider(-85, 85, value=SERVER_SCENE_PARAMS["elevation"], step=1, label="Rotate up / down")
+                    distance = gr.Slider(0.25, 1.4, value=SERVER_SCENE_PARAMS["distance"], step=0.01, label="Zoom")
                 with gr.Row():
-                    target_x = gr.Slider(-0.25, 0.25, value=0.0, step=0.01, label="Move target X")
-                    target_y = gr.Slider(-0.25, 0.25, value=0.0, step=0.01, label="Move target Y")
-                    target_z = gr.Slider(-0.05, 0.45, value=0.20, step=0.01, label="Move target Z")
+                    target_x = gr.Slider(-0.25, 0.25, value=SERVER_SCENE_PARAMS["target"][0], step=0.01, label="Move target X")
+                    target_y = gr.Slider(-0.25, 0.25, value=SERVER_SCENE_PARAMS["target"][1], step=0.01, label="Move target Y")
+                    target_z = gr.Slider(-0.05, 0.45, value=SERVER_SCENE_PARAMS["target"][2], step=0.01, label="Move target Z")
     status = gr.Textbox(label="Status", interactive=False)
 
     render_inputs = [camera, azimuth, elevation, distance, target_x, target_y, target_z]

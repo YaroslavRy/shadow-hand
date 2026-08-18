@@ -1,0 +1,30 @@
+{
+  "browser": {
+    "floorY": -0.2,
+    "camera": {
+      "fov": 38,
+      "near": 0.01,
+      "far": 100,
+      "initialPosition": [0.55, 0.3, 0.85]
+    },
+    "orbit": {
+      "initialTarget": [0.0, 0.28, 0.0],
+      "minDistance": 0.12,
+      "maxDistance": 3.5
+    },
+    "framing": {
+      "centerOffset": [0.53, -0.15, 0.0],
+      "distanceScale": 1.32,
+      "fovDivisor": 3.0,
+      "viewDirection": [1.8, 0.58, 2.05],
+      "nearRadiusScale": 3.0,
+      "farRadiusScale": 14.0
+    }
+  },
+  "server": {
+    "azimuth": 140,
+    "elevation": -15,
+    "distance": 0.75,
+    "target": [0.0, 0.0, 0.2]
+  }
+}

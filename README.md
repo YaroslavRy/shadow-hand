@@ -13,9 +13,9 @@ suggested_hardware: cpu-basic
 
 ![Shadow Hand teleoperation workbench](assets/screen3.png)
 
-This is a research PoC for controlling the [DeepMind MuJoCo Menagerie Shadow Hand](https://github.com/google-deepmind/mujoco_menagerie/tree/main/shadow_hand) from a webcam. It is not a PyBullet demo and it does not use an animated hand substitute: the native reference application uses the Menagerie MJCF, MuJoCo position actuators, and `mj_step` physics.
+This is a research PoC for Shadow Hand teleoperation with the real [DeepMind MuJoCo Menagerie Shadow Hand](https://github.com/google-deepmind/mujoco_menagerie/tree/main/shadow_hand). The core loop is webcam hand pose -> MediaPipe landmarks -> retargeting -> MuJoCo actuators -> Shadow Hand motion, using the real Menagerie MJCF and `mj_step` physics.
 
-## Two execution paths
+## Space paths
 
 ```mermaid
 flowchart LR
@@ -26,13 +26,17 @@ flowchart LR
   M --> V[Rendered Shadow Hand]
 ```
 
-| Path | Purpose | Engine |
-|---|---|---|
-| **Native local** | Research, tuning, contact/tactile-sensor experiments | MuJoCo Python + native viewer |
-| **Space `/server`** | Reference demo, works without WebGL/WASM | Headless MuJoCo + streamed render |
-| **Space `/browser`** | Low-latency demo, everything client-side | Official MuJoCo compiled to WebAssembly |
+| Path | What it does |
+|---|---|
+| **`/browser`** | Fastest demo. MediaPipe + MuJoCo-WASM run in your browser; webcam frames stay local. |
+| **`/server`** | Fallback demo. Frames are uploaded to this Space and rendered server-side. |
+| **Native local** | Source-of-truth research path for sensors, tuning, and future experiments. |
 
-The Space serves both browser and server paths with a link to switch between them; `/` opens the browser path.
+`/` opens the browser path by default.
+
+Near-term roadmap:
+- tactile/contact sensors in the native local MuJoCo path
+- an optimization layer: user pose -> robot pose -> robot hand pose estimate -> minimize user/robot pose error
 
 The WASM path now reproduces the native model's visual and retargeting behaviour locally: it compiles the same MJCF (matching `nq 29` / `nu 25`), steps the same `mj_step` physics, and its retargeting matches the Python mapping to floating-point rounding. See [`docs/WASM.md`](docs/WASM.md).
 
@@ -63,16 +67,7 @@ Press `ESC` or `Q` in the MuJoCo window to quit. Recorded samples are written to
 Each video frame produces 21 MediaPipe points. `compute_signals()` extracts finger curl, signed spread, and thumb-opposition signals. The mapping table in [`shadow_hand/settings.py`](shadow_hand/settings.py) converts those signals to the 20 position-actuator targets, then an EMA smooths the targets before the simulation advances.
 
 ```text
-21 landmarks
-     │
-     ▼
-curl / spread / thumb-opposition
-     │
-     ▼
-ACTUATOR_MAP + optional synergy prior
-     │
-     ▼
-data.ctrl[20] → mj_step → Shadow Hand state
+21 landmarks → curl / spread / thumb-opposition → ACTUATOR_MAP + optional synergy prior → data.ctrl[20] → mj_step → Shadow Hand state
 ```
 
 The CSV log keeps the time-aligned landmarks and actuator targets. It is the dataset scaffold for future EMG/EEG decoders and learned retargeting.
