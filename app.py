@@ -1,7 +1,8 @@
 """Browser demo for Shadow Hand retargeting.
 
-Designed for Hugging Face Spaces: a webcam frame is retargeted to the Shadow
-Hand and rendered server-side without a native MuJoCo viewer.
+Designed for Hugging Face Spaces, serving both execution paths:
+  /server   webcam frames are retargeted and rendered server-side (this module)
+  /browser  the static MuJoCo-WASM build, which runs entirely in the client
 """
 
 import logging
@@ -13,6 +14,10 @@ import gradio as gr
 import mediapipe as mp
 import mujoco
 import numpy as np
+import uvicorn
+from fastapi import FastAPI
+from fastapi.responses import RedirectResponse
+from fastapi.staticfiles import StaticFiles
 
 from shadow_hand.model import extract_shadow_hand_targets
 from shadow_hand.settings import ACTUATOR_MAP, PROJECT_ROOT, SCENE_PATH
@@ -218,15 +223,42 @@ are geometrically retargeted to a 20-actuator MuJoCo Shadow Hand.
     gr.Markdown(
         """### Notes
 
-This is a visual, server-rendered demo—not a low-latency robot controller.
+This is a visual, server-rendered demo—not a low-latency robot controller: your
+camera frames are uploaded and the simulation is rendered here, one visitor at a
+time. **[Try the browser version →](/browser)** — it runs MuJoCo-WASM entirely on
+your machine at a higher rate, and no video leaves your browser.
+
 For native webcam teleoperation, run `uv run mjpython -m shadow_hand.main`
 locally. No camera frames are recorded by this Space.
 """
     )
 
 
-if __name__ == "__main__":
+# Both execution paths are served from this one Space:
+#   /browser  -> static MuJoCo-WASM build (dist/), physics in the client
+#   /server   -> this Gradio app, physics rendered here and streamed back
+# The WASM build is only present when dist/ has been built (the Dockerfile does
+# this in a node stage); locally the app still runs, just without /browser.
+def build_app():
+    fastapi_app = FastAPI()
+    dist = PROJECT_ROOT / "dist"
+
+    if (dist / "index.html").exists():
+        fastapi_app.mount("/browser", StaticFiles(directory=dist, html=True), name="browser")
+        log.info("browser WASM build mounted at /browser")
+    else:
+        log.warning("dist/ not built; /browser is unavailable (run `npm run build`)")
+
+    @fastapi_app.get("/")
+    def _root():
+        # Prefer the client-side path when it is available: it is faster and
+        # does not consume Space CPU per visitor.
+        return RedirectResponse("/browser/" if (dist / "index.html").exists() else "/server")
+
     # Keep only one pending event: interactive video must prefer freshness.
-    demo.queue(default_concurrency_limit=1, max_size=1).launch(
-        server_name="0.0.0.0", server_port=7860
-    )
+    demo.queue(default_concurrency_limit=1, max_size=1)
+    return gr.mount_gradio_app(fastapi_app, demo, path="/server")
+
+
+if __name__ == "__main__":
+    uvicorn.run(build_app(), host="0.0.0.0", port=7860)

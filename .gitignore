@@ -22,3 +22,16 @@ env/
 build/
 dist/
 *.egg
+
+# Node / browser build
+node_modules/
+
+# Local research data and scratch space, none of it belongs in the Space.
+# assets/mujoco_menagerie is the full ~2GB Menagerie checkout; the hand the
+# app actually needs is vendored in space_assets/ and public/mujoco/.
+assets/mujoco_menagerie/
+data/
+logs/
+scratch/
+private/
+.venv/

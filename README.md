@@ -29,10 +29,12 @@ flowchart LR
 | Path | Purpose | Engine |
 |---|---|---|
 | **Native local** | Research, tuning, contact/tactile-sensor experiments | MuJoCo Python + native viewer |
-| **This Hugging Face Space** | Public interactive demonstration | Headless MuJoCo + streamed render |
-| **Local WASM experiment** | Low-latency browser prototype, tested before deployment | Official MuJoCo compiled to WebAssembly |
+| **Space `/server`** | Reference demo, works without WebGL/WASM | Headless MuJoCo + streamed render |
+| **Space `/browser`** | Low-latency demo, everything client-side | Official MuJoCo compiled to WebAssembly |
 
-The WASM path is an active experiment; it only becomes the hosted demo after it reproduces the real model’s visual and retargeting behaviour locally.
+The Space serves both browser and server paths with a link to switch between them; `/` opens the browser path.
+
+The WASM path now reproduces the native model's visual and retargeting behaviour locally: it compiles the same MJCF (matching `nq 29` / `nu 25`), steps the same `mj_step` physics, and its retargeting matches the Python mapping to floating-point rounding. See [`docs/WASM.md`](docs/WASM.md).
 
 ## Current experiment status
 
@@ -41,7 +43,7 @@ The WASM path is an active experiment; it only becomes the hosted demo after it 
 - [x] MuJoCo stepping and native local viewer
 - [x] Per-frame landmark / actuator CSV logging
 - [x] Browser-side MediaPipe prototype
-- [~] Browser-side MuJoCo-WASM renderer and retargeting parity
+- [x] Browser-side MuJoCo-WASM renderer and retargeting parity (verified: max actuator delta 3.9e-15 over 300 samples)
 - [ ] Tactile/contact sensors and contact-readout experiments
 
 ## Run the reference system locally
@@ -75,23 +77,26 @@ data.ctrl[20] → mj_step → Shadow Hand state
 
 The CSV log keeps the time-aligned landmarks and actuator targets. It is the dataset scaffold for future EMG/EEG decoders and learned retargeting.
 
-## Reproducible local WASM workbench
-
-The experimental browser workbench runs locally only:
+## Browser WASM workbench
 
 ```bash
 npm install
-npm run dev -- --port 5180
+npm run dev -- --port 5173
 ```
 
-Open `http://127.0.0.1:5180`. It loads the same Menagerie XML and mesh assets into official MuJoCo WASM; webcam frames remain in the browser. This is being validated against the native reference before it replaces the public Space.
+Open `http://127.0.0.1:5173`. It loads the same Menagerie XML and mesh assets into official MuJoCo WASM and compiles the MJCF in-browser; webcam frames never leave the machine.
+
+The retargeting in [`web/retarget.js`](web/retarget.js) is a direct port of `settings.py` / `model.py` and is checked numerically against the Python implementation — 300 random landmark sets, 20 actuators each, max delta `3.9e-15`. Gains live in `shadow_hand/settings.py`; change them there and port, rather than tuning the two sides independently.
+
+`npm run build` produces a fully static `dist/` (~17 MB, mostly the MuJoCo WASM binary). Architecture, parity method, coordinate-frame pitfalls and known differences are documented in [`docs/WASM.md`](docs/WASM.md).
 
 ## Project map
 
 ```text
 shadow_hand/       native MuJoCo reference application
 space_assets/      Menagerie Shadow Hand MJCF and visual assets
-web/               local MuJoCo-WASM experiment
+web/               browser MuJoCo-WASM path (engine, retargeting, render)
+public/mujoco/     scene assets served to the browser build
 data/              recorded landmark / actuator samples
 docs/              experiment notes and design rationale
 ```

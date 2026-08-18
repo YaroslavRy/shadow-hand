@@ -25,7 +25,7 @@ FINGER_LANDMARKS = {
 FPS = 30.0
 
 # Frame-to-frame smoothing for actuator targets. 0 = no smoothing, 1 = frozen.
-SMOOTHING_FACTOR = 0.15
+SMOOTHING_FACTOR = 0.1
 
 
 # ------------------------------------------------------------------

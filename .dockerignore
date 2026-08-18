@@ -1,5 +1,6 @@
 # The local research checkout contains recordings, experiments and the full
-# Menagerie (~2 GB). A Space needs only its app, retargeting code and one hand.
+# Menagerie (~2 GB). A Space needs only its app, retargeting code, one hand,
+# and the sources for the browser WASM build (built in the node stage).
 *
 !app.py
 !Dockerfile
@@ -8,3 +9,13 @@
 !shadow_hand/**
 !space_assets/
 !space_assets/**
+# Browser path build inputs. node_modules and dist stay excluded by the `*`
+# rule above: dependencies are installed and the bundle built inside the image.
+!package.json
+!package-lock.json
+!vite.config.js
+!index.html
+!web/
+!web/**
+!public/
+!public/**
