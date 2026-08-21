@@ -21,6 +21,15 @@ from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from shadow_hand.model import extract_shadow_hand_targets
+from shadow_hand.sensors import (
+    SignalHistory,
+    build_dashboard_state,
+    build_snapshot,
+    read_named_sensordata,
+    render_finger_table,
+    render_heatmap_image,
+    render_linear_plot,
+)
 from shadow_hand.settings import ACTUATOR_MAP, PROJECT_ROOT, SCENE_PATH
 
 SCENE_PARAMS = json.loads((PROJECT_ROOT / "scene_params.json").read_text())
@@ -57,6 +66,7 @@ class ShadowHandRenderer:
         }
         self.lock = threading.Lock()
         self.frames_processed = 0
+        self.sensor_history = SignalHistory(maxlen=120)
 
     def _set_camera(
         self,
@@ -88,7 +98,16 @@ class ShadowHandRenderer:
     ):
         """Retarget the latest camera frame and return preview + render."""
         if frame is None:
-            return None, None, "Waiting for a webcam frame."
+            sensor_plot, sensor_heatmap, sensor_table, sensor_status = self._sensor_outputs()
+            return (
+                None,
+                None,
+                "Waiting for a webcam frame.",
+                sensor_status,
+                sensor_table,
+                sensor_plot,
+                sensor_heatmap,
+            )
 
         with self.lock:
             started = time.perf_counter()
@@ -126,6 +145,7 @@ class ShadowHandRenderer:
             if keypoints is None:
                 simulation_ms = 0.0
 
+            sensor_plot, sensor_heatmap, sensor_table, sensor_status = self._sensor_outputs()
             render_started = time.perf_counter()
             rendered = self._render()
             render_ms = (time.perf_counter() - render_started) * 1_000
@@ -138,7 +158,7 @@ class ShadowHandRenderer:
                     self.frames_processed, inference_ms, render_ms, total_ms,
                 )
             preview = cv2.resize(annotated, (160, 120), interpolation=cv2.INTER_AREA)
-            return preview, rendered, status
+            return preview, rendered, status, sensor_status, sensor_table, sensor_plot, sensor_heatmap
 
     def update_camera(
         self,
@@ -154,7 +174,30 @@ class ShadowHandRenderer:
             self._set_camera(
                 azimuth, elevation, distance, target_x, target_y, target_z
             )
-            return self._render(), "Scene camera updated."
+            _, _, sensor_table, sensor_status = self._sensor_outputs()
+            return self._render(), "Scene camera updated.", sensor_status, sensor_table
+
+    def _sensor_outputs(self):
+        sensor_values, availability = read_named_sensordata(self.model, self.data)
+        snapshot = build_snapshot(sensor_values, availability=availability)
+        state = build_dashboard_state(snapshot.by_name, max_region_value=0.35)
+        self.sensor_history.append(state.total_contact)
+        sensor_plot = render_linear_plot(self.sensor_history)
+        sensor_heatmap = render_heatmap_image(state)
+        sensor_table = render_finger_table(state, max_value=0.6)
+        if availability.available:
+            sensor_status = (
+                f"{len(availability.resolved_names)} tactile sensors live · "
+                f"total contact {state.total_contact:.3f}"
+            )
+        else:
+            missing = ", ".join(availability.missing_names[:4])
+            suffix = "..." if len(availability.missing_names) > 4 else ""
+            sensor_status = (
+                f"tactile sensors incomplete · missing {len(availability.missing_names)} "
+                f"({missing}{suffix})"
+            )
+        return sensor_plot, sensor_heatmap, sensor_table, sensor_status
 
 
 PIPELINE = ShadowHandRenderer()
@@ -206,9 +249,14 @@ Roadmap:
                     target_y = gr.Slider(-0.25, 0.25, value=SERVER_SCENE_PARAMS["target"][1], step=0.01, label="Move target Y")
                     target_z = gr.Slider(-0.05, 0.45, value=SERVER_SCENE_PARAMS["target"][2], step=0.01, label="Move target Z")
     status = gr.Textbox(label="Status", interactive=False)
+    sensor_status = gr.Textbox(label="Tactile sensors", interactive=False)
+    with gr.Row():
+        sensor_table = gr.Textbox(label="Finger signals", interactive=False, lines=8, max_lines=8, scale=1)
+        sensor_plot = gr.Image(label="Linear signal plot", type="numpy", height=160, scale=2)
+        sensor_heatmap = gr.Image(label="Heatmap", type="numpy", height=160, scale=1)
 
     render_inputs = [camera, azimuth, elevation, distance, target_x, target_y, target_z]
-    render_outputs = [landmarks, rendered, status]
+    render_outputs = [landmarks, rendered, status, sensor_status, sensor_table, sensor_plot, sensor_heatmap]
     camera.change(
         PIPELINE.process,
         inputs=render_inputs,
@@ -229,7 +277,7 @@ Roadmap:
         control.change(
             PIPELINE.update_camera,
             inputs=controls,
-            outputs=[rendered, status],
+            outputs=[rendered, status, sensor_status, sensor_table],
             trigger_mode="always_last",
             concurrency_id="hand-pipeline",
         )
