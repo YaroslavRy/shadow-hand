@@ -25,6 +25,13 @@ from . import tracking
 from .logging_setup import configure_logging
 from .mano_pipeline import SynergyProjector
 from .model import compute_signals, extract_shadow_hand_targets
+from .sensors import (
+    SignalHistory,
+    build_dashboard_state,
+    build_snapshot,
+    read_named_sensordata,
+    render_native_diagnostics,
+)
 from .settings import (
     ACTUATOR_MAP,
     DATA_DIR,
@@ -92,6 +99,50 @@ def cv2_viewer_process(q):
         cv2.destroyAllWindows()
 
 
+def sensor_panel_process(q):
+    """Subprocess that owns the native diagnostics window."""
+    sub_log = logging.getLogger("shadow_hand.sensor_panel")
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    )
+
+    window = "Shadow Hand Diagnostics"
+    cv2.namedWindow(window, cv2.WINDOW_AUTOSIZE)
+    placeholder = np.zeros((760, 1160, 3), dtype=np.uint8)
+    cv2.putText(
+        placeholder,
+        "Waiting for sensor/joint diagnostics...",
+        (250, 380),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.9,
+        (120, 220, 255),
+        2,
+        cv2.LINE_AA,
+    )
+    cv2.imshow(window, placeholder)
+    cv2.waitKey(1)
+    sub_log.info("sensor diagnostics window opened")
+
+    try:
+        while True:
+            try:
+                frame = q.get(timeout=0.05)
+                if frame is None:
+                    sub_log.info("shutdown sentinel received")
+                    break
+                cv2.imshow(window, frame)
+            except python_queue.Empty:
+                cv2.waitKey(1)
+            except Exception:
+                sub_log.exception("error in sensor diagnostics loop")
+            cv2.waitKey(1)
+    except KeyboardInterrupt:
+        sub_log.info("KeyboardInterrupt -> exiting sensor diagnostics subprocess")
+    finally:
+        cv2.destroyAllWindows()
+
+
 def _build_slider_specs(model, data, smoothing_default):
     """Wire calibration slider actuators -> live multiplicative scales.
 
@@ -141,6 +192,11 @@ def parse_args():
     p.add_argument(
         "--no-cv2", action="store_true", help="Do not open the OpenCV preview window"
     )
+    p.add_argument(
+        "--no-sensor-panel",
+        action="store_true",
+        help="Do not open the separate native sensor/joint diagnostics window",
+    )
     return p.parse_args()
 
 
@@ -179,6 +235,15 @@ def main():
         cv2_proc.start()
         log.info("cv2 preview subprocess started (pid=%d)", cv2_proc.pid)
 
+    sensor_proc = None
+    sensor_queue = None
+    if not args.no_sensor_panel:
+        mproc.set_start_method("spawn", force=True)
+        sensor_queue = mproc.Queue(maxsize=2)
+        sensor_proc = mproc.Process(target=sensor_panel_process, args=(sensor_queue,))
+        sensor_proc.start()
+        log.info("sensor diagnostics subprocess started (pid=%d)", sensor_proc.pid)
+
     tracking.init_camera()
     tracker = tracking.FrameTracker()
     tracker.start()
@@ -189,7 +254,7 @@ def main():
 
     model = mujoco.MjModel.from_xml_path(str(SCENE_PATH))
     data = mujoco.MjData(model)
-    model.opt.gravity[2] = 0.0  # Hand is fixed at the wrist; no gravity needed.
+    model.opt.gravity[2] = -9.81  # Needed so the threaded target can hang and swing.
 
     actuator_names = [
         mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_ACTUATOR, i)
@@ -244,6 +309,12 @@ def main():
     last_frame = None
     last_keypoints = None
     last_handedness = None
+    last_tracking_status = "tracker starting"
+    last_retarget_status = "waiting for hand"
+    last_target_peak = 0.0
+    last_target_mean = 0.0
+    sensor_history = SignalHistory(maxlen=120)
+    last_smoothed_targets = {name: 0.0 for name in ACTUATOR_MAP}
 
     # ESC or Q in the MuJoCo viewer is the most reliable shutdown path
     # under mjpython, since this callback fires on the GUI thread.
@@ -276,6 +347,13 @@ def main():
                     )
                     cv2_proc = None
                     shutdown.set()
+                if sensor_proc is not None and not sensor_proc.is_alive():
+                    log.warning(
+                        "sensor diagnostics subprocess died (exit=%s); shutting down",
+                        sensor_proc.exitcode,
+                    )
+                    sensor_proc = None
+                    shutdown.set()
 
                 # ---- Sliders ----
                 t0 = perf()
@@ -289,53 +367,42 @@ def main():
                 live_synergy_blend = slider_vals.get("synergy_blend", 0.0)
                 stage_ns["sliders"] += perf() - t0
 
-                # ---- HUD (throttled) ----
+                # ---- Native diagnostics window (throttled) ----
                 if frame_idx % HUD_EVERY_N == 0:
                     t0 = perf()
-                    FS = mujoco.mjtFontScale.mjFONTSCALE_150
-                    TL = mujoco.mjtGridPos.mjGRID_TOPLEFT
-                    BL = mujoco.mjtGridPos.mjGRID_BOTTOMLEFT
-                    hud_texts = [
-                        (FS, TL, "Calibration", ""),
-                        (FS, TL, "  curl x", f"{scales['curl']:.2f}"),
-                        (FS, TL, "  spread x", f"{scales['spread']:.2f}"),
-                        (FS, TL, "  thumb x", f"{scales['thumb']:.2f}"),
-                        (FS, TL, "  smoothing", f"{live_smoothing:.2f}"),
-                        (FS, TL, "  synergy blnd", f"{live_synergy_blend:.2f}"),
+                    sensor_values, availability = read_named_sensordata(model, data)
+                    sensor_snapshot = build_snapshot(
+                        sensor_values,
+                        availability=availability,
+                    )
+                    sensor_state = build_dashboard_state(
+                        sensor_snapshot.by_name,
+                        max_region_value=0.35,
+                    )
+                    active_threshold = 1e-4
+                    active = [
+                        (name, value)
+                        for name, value in sensor_snapshot.by_name.items()
+                        if value > active_threshold
                     ]
-
-                    # Live signal debug: raw values from compute_signals().
-                    # Watch these as you move your hand to verify the
-                    # geometry is doing what you expect.
-                    if last_keypoints is not None:
-                        sig = compute_signals(last_keypoints)
-                        hud_texts.extend(
-                            [
-                                (FS, BL, "Signals (rad)", ""),
-                                (
-                                    FS,
-                                    BL,
-                                    "  spread index",
-                                    f"{sig['spread_index']:.3f}",
-                                ),
-                                (FS, BL, "  spread ring", f"{sig['spread_ring']:.3f}"),
-                                (
-                                    FS,
-                                    BL,
-                                    "  spread pinky",
-                                    f"{sig['spread_pinky']:.3f}",
-                                ),
-                                (FS, BL, "  curl index", f"{sig['curl_index']:.2f}"),
-                                (
-                                    FS,
-                                    BL,
-                                    "  thumb oppose",
-                                    f"{sig['thumb_oppose']:.2f}",
-                                ),
-                            ]
+                    if active:
+                        peak_name, peak_value = max(active, key=lambda item: item[1])
+                    else:
+                        peak_name, peak_value = "none", 0.0
+                    sensor_history.append(sensor_state.total_contact)
+                    if sensor_queue is not None:
+                        actuator_rows = sorted(last_smoothed_targets.items())
+                        panel = render_native_diagnostics(
+                            sensor_state,
+                            sensor_history,
+                            actuator_rows=actuator_rows,
+                            peak_sensor=(peak_name, peak_value),
+                            active_sensors=len(active),
                         )
-                    with viewer_obj.lock():
-                        viewer_obj.set_texts(hud_texts)
+                        try:
+                            sensor_queue.put_nowait(panel)
+                        except python_queue.Full:
+                            pass
                     stage_ns["hud"] += perf() - t0
 
                 # ---- Get latest tracker result (non-blocking) ----
@@ -345,6 +412,13 @@ def main():
                 if fresh is not None:
                     last_frame, last_keypoints, last_handedness = fresh
                     fresh_frames_since_report += 1
+                    if last_keypoints is not None:
+                        hand_label = last_handedness or "unknown"
+                        last_tracking_status = f"hand ready ({hand_label})"
+                    else:
+                        last_tracking_status = "camera live · no hand detected"
+                elif last_frame is None:
+                    last_tracking_status = "waiting for first tracker frame"
 
                 frame = last_frame
                 keypoints = last_keypoints
@@ -365,11 +439,20 @@ def main():
                         projected, previous_targets, live_smoothing
                     )
                     previous_targets = smoothed_targets.copy()
+                    last_smoothed_targets = smoothed_targets.copy()
 
                     for act_name, val in smoothed_targets.items():
                         aid = act_ids.get(act_name, -1)
                         if aid != -1:
                             data.ctrl[aid] = val
+                    target_values = list(smoothed_targets.values())
+                    if target_values:
+                        last_target_peak = max(abs(v) for v in target_values)
+                        last_target_mean = sum(abs(v) for v in target_values) / len(target_values)
+                    else:
+                        last_target_peak = 0.0
+                        last_target_mean = 0.0
+                    last_retarget_status = f"targets updated · {len(smoothed_targets)} actuators"
                     stage_ns["mapping"] += perf() - t0
 
                     # ---- CSV ----
@@ -383,6 +466,16 @@ def main():
                             row.append(f"{smoothed_targets.get(name, 0.0):.4f}")
                         csv_writer.writerow(row)
                         stage_ns["csv"] += perf() - t0
+                else:
+                    if frame is None:
+                        last_tracking_status = "no camera frame yet"
+                        last_retarget_status = "no frame -> no retarget"
+                    else:
+                        last_tracking_status = "camera live · no hand detected"
+                        last_retarget_status = "holding last pose"
+                    last_target_peak = 0.0
+                    last_target_mean = 0.0
+                    last_smoothed_targets = {name: 0.0 for name in ACTUATOR_MAP}
 
                 # ---- CV2 frame send (forward whatever frame we have) ----
                 if cv2_queue is not None and frame is not None:
@@ -466,6 +559,20 @@ def main():
                     log.warning("cv2 subprocess still alive; sending SIGKILL")
                     cv2_proc.kill()
                     cv2_proc.join(timeout=1.0)
+            if sensor_proc is not None and sensor_proc.is_alive():
+                try:
+                    sensor_queue.put_nowait(None)
+                except Exception:
+                    pass
+                sensor_proc.join(timeout=1.0)
+                if sensor_proc.is_alive():
+                    log.warning("sensor diagnostics subprocess did not exit; terminating")
+                    sensor_proc.terminate()
+                    sensor_proc.join(timeout=1.0)
+                if sensor_proc.is_alive():
+                    log.warning("sensor diagnostics subprocess still alive; sending SIGKILL")
+                    sensor_proc.kill()
+                    sensor_proc.join(timeout=1.0)
 
             try:
                 tracker.stop()

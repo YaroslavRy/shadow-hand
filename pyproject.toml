@@ -1,0 +1,17 @@
+[project]
+name = "shadowhand"
+version = "0.1.0"
+description = "MediaPipe-driven Shadow Hand teleoperation in MuJoCo."
+readme = "README.md"
+requires-python = ">=3.10,<3.13"
+dependencies = [
+    "mediapipe>=0.10.21,<0.10.22",
+    "mujoco>=3.2",
+    "opencv-python>=4.10",
+    "numpy>=1.26,<2",
+    # mediapipe pulls jax transitively; cap to the last versions that ship
+    # macOS x86_64 wheels (Intel Macs).
+    "jax<0.5",
+    "jaxlib<0.5",
+    "gradio>=6.25.0",
+]

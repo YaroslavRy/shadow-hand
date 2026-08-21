@@ -125,6 +125,32 @@ class FrameTracker:
                     mp.solutions.drawing_utils.draw_landmarks(
                         frame, hand_landmarks, mp_hands.HAND_CONNECTIONS
                     )
+                status_text = f"Hand detected ({handedness or 'unknown'})"
+                status_color = (80, 255, 120)
+            else:
+                status_text = "No hand detected"
+                status_color = (90, 190, 255)
+
+            cv2.putText(
+                frame,
+                status_text,
+                (16, 28),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.65,
+                status_color,
+                2,
+                cv2.LINE_AA,
+            )
+            cv2.putText(
+                frame,
+                f"processed={self.frames_processed} dropped={self.frames_dropped}",
+                (16, 54),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.5,
+                (180, 220, 255),
+                1,
+                cv2.LINE_AA,
+            )
 
             # Single-slot queue: drop the previous frame if the consumer
             # hasn't picked it up yet.

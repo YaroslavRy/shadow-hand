@@ -15,6 +15,7 @@
 !package-lock.json
 !vite.config.js
 !index.html
+!scene_params.json
 !web/
 !web/**
 !public/
