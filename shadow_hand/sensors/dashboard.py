@@ -112,7 +112,7 @@ def render_finger_rows_text(
     for name in FINGER_ORDER:
         value = float(finger_totals.get(name, 0.0))
         filled = max(0, min(width, round((value / scale) * width)))
-        bar = "█" * filled + "·" * (width - filled)
+        bar = "=" * filled + "." * (width - filled)
         rows.append((name, f"{bar} {value:.3f}"))
     return rows
 

@@ -26,6 +26,7 @@ from .logging_setup import configure_logging
 from .mano_pipeline import SynergyProjector
 from .model import compute_signals, extract_shadow_hand_targets
 from .sensors import (
+    DEFAULT_DIAGNOSTICS_LAYOUT,
     SignalHistory,
     build_dashboard_state,
     build_snapshot,
@@ -109,7 +110,10 @@ def sensor_panel_process(q):
 
     window = "Shadow Hand Diagnostics"
     cv2.namedWindow(window, cv2.WINDOW_AUTOSIZE)
-    placeholder = np.zeros((760, 1160, 3), dtype=np.uint8)
+    placeholder = np.zeros(
+        (DEFAULT_DIAGNOSTICS_LAYOUT.height, DEFAULT_DIAGNOSTICS_LAYOUT.width, 3),
+        dtype=np.uint8,
+    )
     cv2.putText(
         placeholder,
         "Waiting for sensor/joint diagnostics...",
@@ -239,7 +243,7 @@ def main():
     sensor_queue = None
     if not args.no_sensor_panel:
         mproc.set_start_method("spawn", force=True)
-        sensor_queue = mproc.Queue(maxsize=2)
+        sensor_queue = mproc.Queue(maxsize=1)
         sensor_proc = mproc.Process(target=sensor_panel_process, args=(sensor_queue,))
         sensor_proc.start()
         log.info("sensor diagnostics subprocess started (pid=%d)", sensor_proc.pid)
@@ -301,7 +305,7 @@ def main():
     # Per-stage timing accumulators - cleared every perf report.
     stage_ns = collections.defaultdict(float)
     fresh_frames_since_report = 0
-    HUD_EVERY_N = 5  # Throttle set_texts to ~6 Hz (HUD doesn't need 30 Hz).
+    DIAGNOSTICS_EVERY_N = 6  # ~5 Hz at 30 FPS; enough for tactile readout, lighter on laptops.
     frame_idx = 0
 
     # Cached latest tracker output. The control loop runs faster than
@@ -368,7 +372,7 @@ def main():
                 stage_ns["sliders"] += perf() - t0
 
                 # ---- Native diagnostics window (throttled) ----
-                if frame_idx % HUD_EVERY_N == 0:
+                if sensor_queue is not None and frame_idx % DIAGNOSTICS_EVERY_N == 0:
                     t0 = perf()
                     sensor_values, availability = read_named_sensordata(model, data)
                     sensor_snapshot = build_snapshot(

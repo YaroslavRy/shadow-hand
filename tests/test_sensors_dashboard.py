@@ -1,6 +1,7 @@
 import unittest
 
 from shadow_hand.sensors.dashboard import build_dashboard_state, render_finger_rows_text
+from shadow_hand.sensors.ui import DEFAULT_DIAGNOSTICS_LAYOUT
 try:
     from shadow_hand.sensors.plots import (
         SignalHistory,
@@ -75,7 +76,18 @@ class SensorDashboardTests(unittest.TestCase):
             peak_sensor=("palm_center", 0.6),
             active_sensors=3,
         )
-        self.assertEqual(image.shape, (760, 1160, 3))
+        self.assertEqual(
+            image.shape,
+            (
+                DEFAULT_DIAGNOSTICS_LAYOUT.height,
+                DEFAULT_DIAGNOSTICS_LAYOUT.width,
+                3,
+            ),
+        )
+
+    def test_native_diagnostics_layout_is_module_backed(self) -> None:
+        self.assertEqual(DEFAULT_DIAGNOSTICS_LAYOUT.width, 980)
+        self.assertEqual(DEFAULT_DIAGNOSTICS_LAYOUT.height, 640)
 
     def test_dashboard_state_keeps_contact_summary_without_numpy(self) -> None:
         state = build_dashboard_state(
@@ -94,7 +106,7 @@ class SensorDashboardTests(unittest.TestCase):
         )
         rows = render_finger_rows_text(state, max_value=1.0, width=5)
         self.assertEqual(rows[0][0], "thumb")
-        self.assertIn("██", rows[0][1])
+        self.assertIn("==", rows[0][1])
         self.assertIn("0.500", rows[0][1])
 
 

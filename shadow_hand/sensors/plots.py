@@ -1,18 +1,22 @@
-"""Tiny image renderers for sensor evaluation.
-
-Pure numpy on purpose: keeps the test loop light and avoids extra UI/runtime
-dependencies when we only need quick diagnostic visuals.
-"""
+"""Tiny image renderers for sensor evaluation."""
 
 from __future__ import annotations
 
 from collections import deque
 from dataclasses import dataclass, field
+from functools import lru_cache
 
-import cv2
 import numpy as np
 
-from .dashboard import DashboardState, FINGER_ORDER, render_finger_rows_text
+from .dashboard import DashboardState, FINGER_ORDER, REGION_ORDER, render_finger_rows_text
+from .ui import (
+    DEFAULT_DIAGNOSTICS_LAYOUT,
+    DEFAULT_PALETTE,
+    DiagnosticsLayout,
+    DiagnosticsPalette,
+    build_base_canvas,
+    put_text,
+)
 
 
 @dataclass
@@ -65,29 +69,36 @@ def render_linear_plot(history: SignalHistory, width: int = 420, height: int = 1
         [height - 14 - int((max(0.0, value) / max_value) * (height - 30)) for value in values]
     )
     for x0, y0, x1, y1 in zip(xs[:-1], ys[:-1], xs[1:], ys[1:]):
-        _draw_line(canvas, x0, y0, x1, y1, color=(79, 209, 197))
+        _draw_line(canvas, x0, y0, x1, y1, color=DEFAULT_PALETTE.trace)
     return canvas
 
 
 def render_heatmap_image(state: DashboardState, width: int = 240, height: int = 300) -> np.ndarray:
     canvas = np.zeros((height, width, 3), dtype=np.uint8)
     canvas[:] = (10, 18, 28)
-    _draw_circle(canvas, (54, 190), 16, state.normalized_regions.get("thumb_tip", 0.0))
-    _draw_circle(canvas, (72, 220), 18, state.normalized_regions.get("thumb_pad", 0.0))
+
+    def sx(value: float) -> int:
+        return int(round(value * width))
+
+    def sy(value: float) -> int:
+        return int(round(value * height))
+
+    _draw_circle(canvas, (sx(0.22), sy(0.63)), max(10, width // 12), state.normalized_regions.get("thumb_tip", 0.0))
+    _draw_circle(canvas, (sx(0.30), sy(0.74)), max(12, width // 10), state.normalized_regions.get("thumb_pad", 0.0))
 
     x_positions = {
-        "index": 82,
-        "middle": 116,
-        "ring": 150,
-        "pinky": 184,
+        "index": sx(0.42),
+        "middle": sx(0.58),
+        "ring": sx(0.74),
+        "pinky": sx(0.90),
     }
     for finger, x in x_positions.items():
-        _draw_circle(canvas, (x, 62), 14, state.normalized_regions.get(f"{finger}_tip", 0.0))
-        _draw_circle(canvas, (x, 128), 16, state.normalized_regions.get(f"{finger}_pad", 0.0))
+        _draw_circle(canvas, (x, sy(0.21)), max(10, width // 14), state.normalized_regions.get(f"{finger}_tip", 0.0))
+        _draw_circle(canvas, (x, sy(0.43)), max(12, width // 12), state.normalized_regions.get(f"{finger}_pad", 0.0))
 
-    _draw_circle(canvas, (88, 210), 22, state.normalized_regions.get("palm_radial", 0.0))
-    _draw_circle(canvas, (122, 228), 28, state.normalized_regions.get("palm_center", 0.0))
-    _draw_circle(canvas, (158, 210), 22, state.normalized_regions.get("palm_ulnar", 0.0))
+    _draw_circle(canvas, (sx(0.46), sy(0.70)), max(14, width // 9), state.normalized_regions.get("palm_radial", 0.0))
+    _draw_circle(canvas, (sx(0.63), sy(0.76)), max(16, width // 7), state.normalized_regions.get("palm_center", 0.0))
+    _draw_circle(canvas, (sx(0.81), sy(0.70)), max(14, width // 9), state.normalized_regions.get("palm_ulnar", 0.0))
     return canvas
 
 
@@ -109,67 +120,118 @@ def render_native_diagnostics(
     actuator_rows: list[tuple[str, float]],
     peak_sensor: tuple[str, float],
     active_sensors: int,
-    width: int = 1160,
-    height: int = 760,
+    width: int = DEFAULT_DIAGNOSTICS_LAYOUT.width,
+    height: int = DEFAULT_DIAGNOSTICS_LAYOUT.height,
 ) -> np.ndarray:
-    canvas = np.zeros((height, width, 3), dtype=np.uint8)
-    _draw_background(canvas)
+    return _get_renderer(width, height).render(
+        state,
+        history,
+        actuator_rows=actuator_rows,
+        peak_sensor=peak_sensor,
+        active_sensors=active_sensors,
+    )
 
-    _draw_panel(canvas, (24, 24), (360, 198), "TACTILE SUMMARY")
-    _draw_panel(canvas, (24, 246), (506, 230), "CONTACT TRACE")
-    _draw_panel(canvas, (560, 24), (264, 430), "TACTILE MAP")
-    _draw_panel(canvas, (850, 24), (286, 706), "DRIVEN ACTUATORS")
 
-    info_lines = [
-        f"total contact   {state.total_contact:7.3f}",
-        f"static contact  {history.static_contact():7.3f}",
-        f"hold peak       {history.held_peak():7.3f}",
-        f"active sensors  {active_sensors:7d}",
-        f"peak sensor     {peak_sensor[0]:>12s} {peak_sensor[1]:.3f}",
-    ]
-    for idx, line in enumerate(info_lines):
-        _put_text(canvas, line, (42, 70 + idx * 28), 0.66, (230, 236, 242))
-
-    finger_rows = render_finger_rows_text(state, max_value=0.6, width=12)
-    for idx, (finger, row) in enumerate(finger_rows):
-        _put_text(
-            canvas,
-            f"{finger:>6}  {row}",
-            (42, 212 + idx * 24),
-            0.52,
-            (168, 196, 218),
+class NativeDiagnosticsRenderer:
+    def __init__(
+        self,
+        layout: DiagnosticsLayout = DEFAULT_DIAGNOSTICS_LAYOUT,
+        palette: DiagnosticsPalette = DEFAULT_PALETTE,
+    ) -> None:
+        self.layout = layout
+        self.palette = palette
+        self.base = build_base_canvas(
+            layout,
+            palette,
+            panel_specs=[
+                (layout.summary_origin, layout.summary_size, "TACTILE SUMMARY"),
+                (layout.trace_origin, layout.trace_size, "CONTACT TRACE"),
+                (layout.heatmap_origin, layout.heatmap_size, "TACTILE MAP"),
+                (layout.actuators_origin, layout.actuators_size, "TACTILE CHANNELS"),
+            ],
         )
 
-    trace = render_linear_plot(history, width=464, height=200)
-    canvas[266:466, 44:508] = trace
+    def render(
+        self,
+        state: DashboardState,
+        history: SignalHistory,
+        *,
+        actuator_rows: list[tuple[str, float]],
+        peak_sensor: tuple[str, float],
+        active_sensors: int,
+    ) -> np.ndarray:
+        layout = self.layout
+        palette = self.palette
+        canvas = self.base.copy()
 
-    heatmap = render_heatmap_image(state, width=236, height=404)
-    canvas[42:446, 574:810] = heatmap
+        info_lines = [
+            f"total contact   {state.total_contact:7.3f}",
+            f"static contact  {history.static_contact():7.3f}",
+            f"hold peak       {history.held_peak():7.3f}",
+            f"active sensors  {active_sensors:7d}",
+            f"peak sensor     {peak_sensor[0]:>12s} {peak_sensor[1]:.3f}",
+        ]
+        for idx, line in enumerate(info_lines):
+            put_text(
+                canvas,
+                line,
+                (
+                    layout.summary_text_origin[0],
+                    layout.summary_text_origin[1] + idx * layout.summary_text_step,
+                ),
+                0.62,
+                palette.text_primary,
+            )
 
-    _put_text(canvas, "coverage 20/20 driven", (868, 52), 0.5, (160, 192, 220))
-    for idx, (name, value) in enumerate(actuator_rows):
-        col = idx // 10
-        row = idx % 10
-        x = 868 + col * 132
-        y = 92 + row * 28
-        short = name.replace("rh_A_", "")
-        _put_text(canvas, f"{short:>7} {value: .3f}", (x, y), 0.47, (220, 228, 236))
+        finger_rows = render_finger_rows_text(state, max_value=0.6, width=12)
+        for idx, (finger, row) in enumerate(finger_rows):
+            put_text(
+                canvas,
+                f"{finger:>6}  {row}",
+                (
+                    layout.finger_row_origin[0],
+                    layout.finger_row_origin[1] + idx * layout.finger_row_step,
+                ),
+                0.49,
+                palette.text_secondary,
+            )
 
-    return canvas
+        trace_w, trace_h = layout.trace_image_size
+        trace = render_linear_plot(history, width=trace_w, height=trace_h)
+        tx, ty = layout.trace_image_origin
+        canvas[ty:ty + trace_h, tx:tx + trace_w] = trace
 
+        heatmap_w, heatmap_h = layout.heatmap_image_size
+        heatmap = render_heatmap_image(state, width=heatmap_w, height=heatmap_h)
+        hx, hy = layout.heatmap_image_origin
+        canvas[hy:hy + heatmap_h, hx:hx + heatmap_w] = heatmap
 
-def _draw_background(canvas: np.ndarray) -> None:
-    h, w = canvas.shape[:2]
-    top = np.array([7, 11, 18], dtype=np.float32)
-    bottom = np.array([11, 18, 28], dtype=np.float32)
-    for y in range(h):
-        t = y / max(1, h - 1)
-        color = (1 - t) * top + t * bottom
-        canvas[y, :, :] = color.astype(np.uint8)
-    for x in range(0, w, 28):
-        canvas[:, x:x + 1] = (15, 24, 36)
-    for y in range(0, h, 28):
-        canvas[y:y + 1, :] = (13, 20, 30)
+        put_text(canvas, "13 channels · raw values", layout.footer_label_origin, 0.46, palette.text_secondary)
+        sensor_rows = [(name, float(state.region_values.get(name, 0.0))) for name in REGION_ORDER]
+        for idx, (name, value) in enumerate(sensor_rows):
+            col = idx // 7
+            row = idx % 7
+            x = layout.actuator_text_origin[0] + col * layout.actuator_col_width
+            y = layout.actuator_text_origin[1] + row * layout.actuator_row_height
+            bar_width = 8
+            normalized = min(1.0, max(0.0, value / 0.35))
+            filled = max(0, min(bar_width, round(normalized * bar_width)))
+            bar = "=" * filled + "." * (bar_width - filled)
+            short = name.replace("_", " ")
+            put_text(canvas, f"{short:<12} {bar} {value: .3f}", (x, y), 0.42, palette.text_primary)
+
+        # keep one compact actuator sanity line so we still know the control path is alive
+        if actuator_rows:
+            peak_act_name, peak_act_value = max(actuator_rows, key=lambda item: abs(item[1]))
+            put_text(
+                canvas,
+                f"peak actuator {peak_act_name.replace('rh_A_', '')} {peak_act_value: .3f}",
+                (42, layout.trace_origin[1] + layout.trace_size[1] + 34),
+                0.42,
+                palette.text_secondary,
+            )
+
+        return canvas
 
 
 def _draw_line(
@@ -204,35 +266,10 @@ def _draw_circle(
     canvas[mask] = color
 
 
-def _draw_panel(
-    canvas: np.ndarray,
-    top_left: tuple[int, int],
-    size: tuple[int, int],
-    title: str,
-) -> None:
-    x, y = top_left
-    w, h = size
-    cv2.rectangle(canvas, (x, y), (x + w, y + h), (32, 48, 70), thickness=1)
-    cv2.rectangle(canvas, (x, y), (x + w, y + h), (12, 18, 28), thickness=-1)
-    cv2.rectangle(canvas, (x, y), (x + w, y + 30), (14, 22, 34), thickness=-1)
-    cv2.line(canvas, (x + 12, y + 22), (x + 68, y + 22), (244, 150, 30), 1)
-    _put_text(canvas, title, (x + 78, y + 22), 0.48, (146, 190, 240))
-
-
-def _put_text(
-    canvas: np.ndarray,
-    text: str,
-    origin: tuple[int, int],
-    scale: float,
-    color: tuple[int, int, int],
-) -> None:
-    cv2.putText(
-        canvas,
-        text,
-        origin,
-        cv2.FONT_HERSHEY_SIMPLEX,
-        scale,
-        color,
-        1,
-        cv2.LINE_AA,
-    )
+@lru_cache(maxsize=4)
+def _get_renderer(width: int, height: int) -> NativeDiagnosticsRenderer:
+    if width == DEFAULT_DIAGNOSTICS_LAYOUT.width and height == DEFAULT_DIAGNOSTICS_LAYOUT.height:
+        layout = DEFAULT_DIAGNOSTICS_LAYOUT
+    else:
+        layout = DiagnosticsLayout(width=width, height=height)
+    return NativeDiagnosticsRenderer(layout=layout, palette=DEFAULT_PALETTE)

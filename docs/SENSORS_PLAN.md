@@ -624,6 +624,128 @@ Next step:
 - if the style still feels too heavy, simplify the panel typography/layout further
 - then start the joint-space optimization layer for fuller reconstruction
 
+### Iteration 14 — modular native UI + lighter panel rendering
+
+Date: 2026-08-24
+
+Expectation:
+
+- native diagnostics UI is split into explicit module files for palette, sizes, and layout
+- native diagnostics panel looks cleaner and less debug-like
+- native diagnostics rendering costs less on MacBook by reusing static chrome and shrinking the panel footprint
+
+Checks to run:
+
+- `UV_CACHE_DIR=.uv-cache uv run --no-sync python -m unittest tests.test_sensors_dashboard`
+- `.venv/bin/python -m py_compile shadow_hand/main.py shadow_hand/sensors/*.py shadow_hand/sensors/ui/*.py`
+- `UV_CACHE_DIR=.uv-cache uv run --no-sync python -c "from shadow_hand.sensors import SignalHistory, build_dashboard_state, render_native_diagnostics; h=SignalHistory(maxlen=8); [h.append(v) for v in (0.0,0.1,0.3)]; s=build_dashboard_state({'thumb_tip':0.2,'palm_center':0.4}, max_region_value=1.0); img=render_native_diagnostics(s,h,actuator_rows=[('rh_A_FFJ0',0.2)],peak_sensor=('palm_center',0.4),active_sensors=2); print(img.shape)"`
+
+Observed so far:
+
+- the current panel renderer is still a single file with hard-coded palette, geometry, and chrome
+- panel size is large enough to be noticeable on laptop CPU/GPU copies
+- static chrome is recomputed every redraw even though only the numbers/plots change
+
+Decision:
+
+- create `shadow_hand/sensors/ui/` for palette + layout + reusable chrome
+- add a renderer object that caches the base panel
+- slightly reduce the panel footprint while keeping the same information
+- keep this as native-local only for now
+
+Observed after fix:
+
+- `tests.test_sensors_dashboard`: pass
+- compile sanity for `shadow_hand/main.py`, `shadow_hand/sensors/*.py`, and `shadow_hand/sensors/ui/*.py`: pass
+- panel render smoke-check: pass (`(640, 980, 3)`)
+- native app import sanity: pass
+- native diagnostics UI is now split across:
+  - `shadow_hand/sensors/ui/palette.py`
+  - `shadow_hand/sensors/ui/layout.py`
+  - `shadow_hand/sensors/ui/chrome.py`
+  - `shadow_hand/sensors/plots.py`
+- static panel chrome is cached and reused instead of being redrawn each update
+- default diagnostics panel size is reduced from `1160x760` to `980x640`
+- diagnostics refresh is explicitly throttled for the native panel
+- sensor diagnostics queue now keeps only one pending frame to reduce stale backlog
+
+Pass / partial / fail:
+
+- pass for modularizing palette/layout/chrome into dedicated UI files
+- pass for reducing static redraw work in the panel renderer
+- pass for reducing panel footprint and queue backlog
+- partial for laptop lag: code-side reductions are in, but final judgment still needs visual confirmation on the target MacBook
+
+Next step:
+
+- visually check the native app on the user's MacBook
+- if lag is still noticeable, profile the remaining hot path:
+  - MuJoCo stepping
+  - tracker frame rate
+  - cv2 preview copies
+  - diagnostics render cadence
+- then do one more UI cleanup pass on spacing/typography if needed
+
+### Iteration 15 — readable sensor-first diagnostics + wider touch coverage
+
+Date: 2026-08-24
+
+Expectation:
+
+- native diagnostics window is readable on macOS without broken glyphs or overlapping text
+- sensor values are visible directly, not hidden behind actuator-heavy panels
+- live grasp contact is easier to trigger by enlarging practical touch-site coverage
+
+Checks to run:
+
+- `UV_CACHE_DIR=.uv-cache uv run --no-sync python -m unittest tests.test_sensors_dashboard tests.test_sensors_mjcf`
+- `.venv/bin/python -m py_compile shadow_hand/main.py shadow_hand/sensors/*.py shadow_hand/sensors/ui/*.py`
+- `UV_CACHE_DIR=.uv-cache uv run --no-sync python - <<'PY' ... forced palm-center contact check ... PY`
+
+Observed so far:
+
+- Unicode bar glyphs render as `?` on the user's machine
+- actuator panel is taking too much visual priority over actual tactile values
+- scripted forced contact confirms the sensor path is alive:
+  - `palm_center ~= 241.13`
+- therefore the remaining problem is practical contact coverage + poor diagnostics presentation
+
+Decision:
+
+- replace Unicode text bars with ASCII-safe rendering
+- replace the large actuator-focused block with direct per-sensor numeric readout
+- enlarge touch-site sizes slightly so live grasp contact is easier to register
+
+Observed after fix:
+
+- `tests.test_sensors_dashboard` + `tests.test_sensors_mjcf`: pass
+- compile sanity for native app + sensor UI modules: pass
+- forced contact sanity check still excites the tactile path after site enlargement:
+  - scripted `palm_center ~= 2.86`
+- diagnostics panel is now sensor-first:
+  - no Unicode bars
+  - direct tactile channel values on the right
+  - actuator wall removed from visual priority
+- practical touch coverage was widened for:
+  - fingertips
+  - finger pads
+  - palm sites
+
+Pass / partial / fail:
+
+- pass for removing broken glyphs from the native panel
+- pass for making the panel sensor-first instead of actuator-first
+- pass for keeping a verified nonzero sensor path with a reproducible forced-contact test
+- partial for live teleop grasp feel: still needs one real visual check on the user's machine
+
+Next step:
+
+- user runs the verified native path and checks:
+  - are tactile numbers now visible when grasping?
+  - does contact trigger more easily?
+  - is the panel still visually sloppy anywhere?
+- then do one last spacing/palette cleanup pass if needed
+
 ## Module split
 
 ```text

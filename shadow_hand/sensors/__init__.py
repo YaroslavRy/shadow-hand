@@ -14,6 +14,7 @@ from .dashboard import (
 )
 from .runtime import SensorAvailability, SensorSnapshot, build_snapshot, named_values
 from .schema import SENSOR_LAYOUT, SENSOR_NAMES, SENSOR_REGIONS, sensor_names
+from .ui import DEFAULT_DIAGNOSTICS_LAYOUT
 
 try:
     from .mjcf import inspect_sensor_availability, read_named_sensordata, resolve_sensor_bindings
@@ -39,6 +40,7 @@ except ModuleNotFoundError:  # pragma: no cover - optional in pure-Python test r
 
 __all__ = [
     "DashboardState",
+    "DEFAULT_DIAGNOSTICS_LAYOUT",
     "SENSOR_LAYOUT",
     "SENSOR_NAMES",
     "SENSOR_REGIONS",

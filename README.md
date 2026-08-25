@@ -9,8 +9,6 @@ suggested_hardware: cpu-basic
 
 # Shadow Hand Teleoperation
 
-![Shadow Hand teleoperation workbench](https://raw.githubusercontent.com/YaroslavRy/shadow-hand/hf-space-local/assets/screen3.png)
-
 ## Abstract
 
 This project is a research PoC for vision-driven teleoperation of the MuJoCo Menagerie Shadow Hand, with the longer-term goal of building a richer bio-inspired robotics stack around it.
