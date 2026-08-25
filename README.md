@@ -9,51 +9,145 @@ suggested_hardware: cpu-basic
 
 # Shadow Hand Teleoperation
 
-**Webcam hand pose → MediaPipe landmarks → retargeting → real MuJoCo Shadow Hand.**
+![Shadow Hand teleoperation workbench](https://raw.githubusercontent.com/YaroslavRy/shadow-hand/hf-space-local/assets/screen3.png)
 
-![Shadow Hand teleoperation workbench](assets/screen3.png)
+## Abstract
 
-This is a research PoC for Shadow Hand teleoperation with the real [DeepMind MuJoCo Menagerie Shadow Hand](https://github.com/google-deepmind/mujoco_menagerie/tree/main/shadow_hand). The core loop is:
+This project is a research PoC for vision-driven teleoperation of the MuJoCo Menagerie Shadow Hand, with the longer-term goal of building a richer bio-inspired robotics stack around it.
+
+The current system already closes a minimal perception-to-action loop:
 
 ```text
-webcam hand pose → MediaPipe landmarks → retargeting → MuJoCo actuators → Shadow Hand motion
+human hand -> MediaPipe hand pose estimation -> retargeting -> Shadow Hand actuator commands -> MuJoCo simulation
 ```
 
-We use the real Menagerie MJCF and real `mj_step` physics. The project has two public demo paths and one native research path.
+The system uses the MuJoCo Menagerie Shadow Hand model and runs it in MuJoCo simulation.
 
-## Space paths
+The broader purpose is to turn this into a foundation for future work on:
 
-```mermaid
-flowchart LR
-  C[Webcam] --> MP[MediaPipe: 21 landmarks]
-  MP --> R[Geometric retargeting]
-  R --> A[20 Shadow Hand actuator targets]
-  A --> M[MuJoCo Menagerie model]
-  M --> V[Rendered Shadow Hand]
+- tactile sensing
+- self-calibration
+- signal fusion and perception
+- action models
+- reinforcement learning
+- bio-inspired robot manipulation
+
+In other words, this repository is not only a teleoperation demo. It is the beginning of a modular experimental platform for studying how perception, control, touch, and learned policies can be combined in one reproducible MuJoCo system.
+
+## Research purpose
+
+We are building toward a layered robotics stack:
+
+```text
+vision
+  + tactile sensing
+  + calibration / adaptation
+  + action modeling
+  + policy learning
+  = embodied manipulation research platform
 ```
 
-| Path | What it does |
+Near-term scientific goals:
+
+1. Establish a stable teleoperation baseline.
+2. Add tactile/contact sensing and interpretable diagnostics.
+3. Introduce self-calibration and pose-alignment optimization.
+4. Build signal fusion modules across vision, touch, and future modalities.
+5. Use the resulting state/action interface for action models and RL.
+
+Longer-term direction:
+
+```text
+multimodal sensing -> fused state estimate -> calibrated hand model
+-> action prior / action model -> closed-loop control -> manipulation skill learning
+```
+
+## System overview
+
+Current data path:
+
+```text
+camera frame
+  -> MediaPipe landmarks (Hand pose estimation)
+  -> geometric retargeting
+  -> 20 actuator targets
+  -> MuJoCo Shadow Hand dynamics
+  -> rendered robot state
+```
+
+Planned extended data path:
+
+```text
+vision + touch + calibration signals
+  -> fusion / perception layer
+  -> robot state estimate
+  -> optimization / self-calibration
+  -> action model / policy
+  -> robot control
+```
+
+Planned closed-loop path:
+
+```text
+camera + touch
+  -> fusion / perception
+  -> user-hand estimate
+  -> retargeting
+  -> self-calibration module
+  -> robot command
+  -> MuJoCo robot state
+  -> contact + pose feedback
+  -> updated calibration / corrected control
+```
+
+## Execution paths
+
+| Path | Role |
 |---|---|
-| **`/browser`** | Fastest demo. MediaPipe + MuJoCo-WASM run in your browser; webcam frames stay local. |
-| **`/server`** | Fallback demo. MediaPipe + MuJoCo run on the Space and rendered frames are streamed back. |
-| **Native local** | Source-of-truth research path for tactile sensors, diagnostics, tuning, and future experiments. |
+| `/browser` | Fast demo path. MediaPipe + MuJoCo-WASM run in the browser; webcam frames stay local. |
+| `/server` | Fallback visualization path. Frames are processed and rendered on the Space. |
+| Native local app | Source-of-truth research path for sensors, debugging, tuning, and future experiments. |
 
-`/` opens the browser path by default.
+Default behavior:
 
-## What is implemented now
+```text
+/  -> /browser
+/server -> Gradio server-rendered app
+/browser -> static MuJoCo-WASM app
+```
+
+If the browser page is opened from the Hugging Face static domain, its server link should redirect to the main Space host.
+
+## Current capabilities
 
 - real MuJoCo Menagerie Shadow Hand assets
 - MediaPipe-to-actuator retargeting
 - native MuJoCo teleoperation app
 - browser MuJoCo-WASM teleoperation path
-- native tactile/contact sensor experiment
+- CSV logging of landmarks and actuator signals
+- tactile/contact sensing in the native path
 - native diagnostics for:
-  - per-sensor contact activity
-  - linear signal traces
-  - heatmap-style contact summary
-  - CSV logging for later analysis
+  - per-sensor activity
+  - rolling linear traces
+  - heatmap-style contact summaries
+  - contact totals and channel values
 
-The WASM path now reproduces the native model's visual and retargeting behaviour locally: it compiles the same MJCF (matching `nq 29` / `nu 25`), steps the same `mj_step` physics, and its retargeting matches the Python mapping to floating-point rounding. See [`docs/WASM.md`](docs/WASM.md).
+## Tactile checkpoint
+
+As of August 24, 2026, the project includes a first tactile sensing iteration in the native MuJoCo app:
+
+- touch sensors attached to fingertip, finger-pad, and palm regions
+- a suspended dynamic object for contact and grasp experiments
+- a separate diagnostics window for quick tactile inspection
+- modular UI files for palette, layout, and rendering behavior
+
+This is still an experimental first step. The tactile system is intended as a base for later:
+
+- fused perception
+- grasp-state estimation
+- contact-aware control
+- action-model supervision
+- RL reward shaping
 
 ## Current experiment status
 
@@ -61,93 +155,77 @@ The WASM path now reproduces the native model's visual and retargeting behaviour
 - [x] 20 actuator targets from MediaPipe geometry
 - [x] MuJoCo stepping and native local viewer
 - [x] Per-frame landmark / actuator CSV logging
-- [x] Browser-side MediaPipe prototype
-- [x] Browser-side MuJoCo-WASM renderer and retargeting parity (verified: max actuator delta 3.9e-15 over 300 samples)
-- [x] Tactile/contact sensors and native contact-readout experiments
-- [ ] Contact-driven grasp evaluation
-- [ ] Optimization layer for user-pose ↔ robot-pose matching
+- [x] Browser-side MuJoCo-WASM renderer
+- [x] Tactile/contact sensors in the native path
+- [ ] Self-calibration layer
+- [ ] Sensor fusion layer
+- [ ] Action-model interface
+- [ ] RL training loop
 
-## Sensor experiment
+## Local usage
 
-The native MuJoCo app now includes tactile/contact sensors on the Shadow Hand plus a dynamic test object for grasp experiments.
-
-Current sensor readouts:
-
-- raw touch/contact values
-- smoothed static-contact estimate
-- held peak / transient spike tracking
-- per-sensor heatmap-style summary
-- aggregate contact totals for quick grasp checks
-
-This is still a PoC. The current goal is to make sensing readable, stable, and fast enough for iteration on a laptop before building more advanced grasp logic.
-
-## Run the reference system locally
-
-The local application is the source of truth for physics and future sensor work. It requires Python 3.10, MuJoCo, and a webcam.
+### Native reference app
 
 ```bash
 uv sync
 uv run mjpython -m shadow_hand.main
 ```
 
-Press `ESC` or `Q` in the MuJoCo window to quit. Recorded samples are written to `data/hand_log.csv` unless `--no-record` is passed.
-
-Useful native variants:
+Useful variants:
 
 ```bash
 uv run mjpython -m shadow_hand.main --no-cv2
 uv run mjpython -m shadow_hand.main --no-sensor-panel
 ```
 
-## Retargeting experiment
+The native app is the main research path.
 
-Each video frame produces 21 MediaPipe points. `compute_signals()` extracts finger curl, signed spread, and thumb-opposition signals. The mapping table in [`shadow_hand/settings.py`](shadow_hand/settings.py) converts those signals to the 20 position-actuator targets, then an EMA smooths the targets before the simulation advances.
-
-```text
-21 landmarks → curl / spread / thumb-opposition → ACTUATOR_MAP + optional synergy prior → data.ctrl[20] → mj_step → Shadow Hand state
-```
-
-The CSV log keeps the time-aligned landmarks and actuator targets. It is the dataset scaffold for future EMG/EEG decoders and learned retargeting.
-
-## Browser WASM workbench
+### Browser MuJoCo-WASM app
 
 ```bash
 npm install
 npm run dev -- --port 5173
 ```
 
-Open `http://127.0.0.1:5173`. It loads the same Menagerie XML and mesh assets into official MuJoCo WASM and compiles the MJCF in-browser; webcam frames never leave the machine.
-
-The retargeting in [`web/retarget.js`](web/retarget.js) is a direct port of `settings.py` / `model.py` and is checked numerically against the Python implementation — 300 random landmark sets, 20 actuators each, max delta `3.9e-15`. Gains live in `shadow_hand/settings.py`; change them there and port, rather than tuning the two sides independently.
-
-`npm run build` produces a fully static `dist/` (~17 MB, mostly the MuJoCo WASM binary). Architecture, parity method, coordinate-frame pitfalls and known differences are documented in [`docs/WASM.md`](docs/WASM.md).
-
-## Next steps
-
-- improve native UI quality and reduce laptop lag
-- make tactile readouts easier to read during grasping
-- add grasp objects and contact-driven evaluation
-- add an optimization layer:
+Open:
 
 ```text
-user hand pose → robot target pose → robot forward pose estimate → minimize pose error
+http://127.0.0.1:5173
 ```
 
-- extend from actuator-level mapping toward fuller joint-space reconstruction
+This path runs MediaPipe and MuJoCo-WASM locally in the browser.
 
 ## Project map
 
 ```text
-shadow_hand/       native MuJoCo reference application
-space_assets/      Menagerie Shadow Hand MJCF and visual assets
-web/               browser MuJoCo-WASM path (engine, retargeting, render)
-public/mujoco/     scene assets served to the browser build
-data/              recorded landmark / actuator samples
-docs/              experiment notes and design rationale
+shadow_hand/       native MuJoCo app, tracking, retargeting, sensors
+web/               browser MuJoCo-WASM path
+public/mujoco/     browser-served MuJoCo scene assets
+space_assets/      Space-specific MuJoCo assets
+assets/            screenshots and bundled Menagerie assets
+docs/              experiment notes, architecture, WASM notes, plans
+tests/             behavior checks for sensors, runtime, and UI slices
 ```
+
+## Why this matters
+
+A useful robot-hand research platform should support more than just kinematic imitation. It should let us study how multiple signals can be combined into a richer control system.
+
+This repo is meant to become a small but serious foundation for that direction:
+
+```text
+teleoperation baseline
+  -> tactile grounding
+  -> multimodal fusion
+  -> self-calibration
+  -> action abstraction
+  -> policy learning
+```
+
+That makes it relevant not only as a demo, but as infrastructure for future work in bio-inspired robotics, sensor fusion, contact-rich manipulation, and learning-based control.
 
 ## References
 
 - DeepMind, [MuJoCo Menagerie: Shadow Hand](https://github.com/google-deepmind/mujoco_menagerie/tree/main/shadow_hand)
-- Santello, Flanders & Soechting (1998), *Postural Hand Synergies for Tool Use*
 - Google, [MediaPipe Hands](https://ai.google.dev/edge/mediapipe/solutions/vision/hand_landmarker)
+- Santello, Flanders & Soechting (1998), *Postural Hand Synergies for Tool Use*
